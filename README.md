@@ -4,7 +4,7 @@ A simple desktop application for managing your Frigate NVR backend. Written in C
 
 ## What is this?
 
-This is a basic desktop client for [Frigate](https://frigate.video/), an open-source NVR (Network Video Recorder). It aims to provide a native desktop interface for interacting with your Frigate instance, separate from the web interface.
+This is a basic desktop client for [Frigate](https://frigate.video/) [Repo](https://github.com/blakeblackshear/frigate), an open-source NVR (Network Video Recorder). It aims to provide a native desktop interface for interacting with your Frigate instance, separate from the web interface.
 
 ## Current Status
 
