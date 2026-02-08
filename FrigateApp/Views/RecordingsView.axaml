@@ -1,0 +1,90 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:FrigateApp.ViewModels"
+             xmlns:conv="using:Avalonia.Data.Converters"
+             xmlns:localconv="using:FrigateApp.Converters"
+             xmlns:controls="using:FrigateApp.Controls"
+             x:Class="FrigateApp.Views.RecordingsView"
+             x:DataType="vm:RecordingsViewModel">
+
+    <Grid RowDefinitions="Auto,Auto,*">
+        <Border Grid.Row="0" Background="#1a1a1a" Padding="12,8" BorderBrush="#333" BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="Auto,*">
+                <Button Content="← Назад" Command="{Binding BackCommand}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                    <TextBlock Text="Записи" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <ComboBox ItemsSource="{Binding DaysWithRecordings}"
+                              SelectedItem="{Binding SelectedDay}"
+                              MinWidth="120"
+                              VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding ErrorText}" Foreground="Orange"
+                              IsVisible="{Binding ErrorText, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="1" Background="#252525" Padding="12,6" BorderBrush="#333" BorderThickness="0,0,0,1">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                <controls:TimelineControl x:Name="Timeline"
+                                           MinWidth="{Binding TimelineWidth}"
+                                           RangeStart="{Binding TimelineRangeStart}"
+                                           RangeEnd="{Binding TimelineRangeEnd}"
+                                           Segments="{Binding TimelineSegments}"/>
+            </ScrollViewer>
+        </Border>
+
+        <Grid Grid.Row="2" Margin="12">
+            <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoading}" Height="4" VerticalAlignment="Top"/>
+            <Grid RowDefinitions="Auto,*">
+                <Border Grid.Row="0" Background="#111" CornerRadius="4" Padding="8" Margin="0,0,0,8"
+                        IsVisible="{Binding ExpandedCameraName, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}">
+                    <Grid RowDefinitions="Auto,*">
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="0,0,0,6">
+                            <TextBlock Text="{Binding ExpandedCameraName}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <Button Content="Смотреть в приложении" Command="{Binding PlayInAppCommand}" CommandParameter="{Binding ExpandedCameraName}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Border Grid.Row="1" Background="Black" MinHeight="280" ClipToBounds="True">
+                            <controls:CameraPlayer x:Name="ExpandedPlayer"/>
+                        </Border>
+                    </Grid>
+                </Border>
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <Border IsVisible="{Binding IsLoadingPreviews}" Background="#40000000" Padding="8" HorizontalAlignment="Center" Margin="0,4,0,0">
+                            <TextBlock Text="Загрузка превью…" Foreground="#aaa"/>
+                        </Border>
+                        <ItemsControl ItemsSource="{Binding CameraItems}" Margin="0,8,0,0">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <controls:CameraGridPanel TileScale="1"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="vm:CameraRecordingItemViewModel">
+                                <Button Command="{Binding ToggleExpandCommand}"
+                                        Background="#222"
+                                        BorderBrush="#444"
+                                        BorderThickness="1"
+                                        Padding="0"
+                                        Margin="2"
+                                        Cursor="Hand"
+                                        Height="158"
+                                        HorizontalContentAlignment="Stretch"
+                                        VerticalContentAlignment="Stretch">
+                                    <Grid RowDefinitions="Auto,*">
+                                        <Border Grid.Row="0" Background="#1a1a1a" Padding="6,4">
+                                            <TextBlock Text="{Binding CameraName}" FontWeight="SemiBold" FontSize="12"/>
+                                        </Border>
+                                        <Image Grid.Row="1" Source="{Binding PreviewImage, Converter={x:Static localconv:NullToPlaceholderBitmapConverter.Instance}}"
+                                               Stretch="UniformToFill"/>
+                                    </Grid>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

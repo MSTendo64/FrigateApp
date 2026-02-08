@@ -1,0 +1,39 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:FrigateApp.ViewModels"
+             x:Class="FrigateApp.Views.SettingsView"
+             x:DataType="vm:SettingsViewModel">
+
+    <Grid RowDefinitions="Auto,*">
+        <!-- Верхняя панель -->
+        <Border Grid.Row="0" Background="#1a1a1a" Padding="12,8" BorderBrush="#333" BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="Auto,*">
+                <Button Grid.Column="0" Content="← Назад" Command="{Binding BackCommand}"
+                        VerticalAlignment="Center" Padding="8,4"/>
+                <TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="16" FontWeight="SemiBold"
+                           VerticalAlignment="Center" Margin="12,0,0,0"/>
+            </Grid>
+        </Border>
+
+        <!-- Контент настроек -->
+        <ScrollViewer Grid.Row="1" Background="#0d0d0d">
+            <StackPanel Margin="24" Spacing="24" MaxWidth="600" HorizontalAlignment="Left">
+                <TextBlock Text="Общие" FontSize="14" FontWeight="SemiBold" Foreground="#888"/>
+                <Border Background="#1a1a1a" Padding="16" BorderBrush="#333" BorderThickness="1">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Здесь можно добавить настройки приложения: тема, язык, параметры по умолчанию и т.д."
+                                   Foreground="#aaa" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="О приложении" FontSize="14" FontWeight="SemiBold" Foreground="#888"/>
+                <Border Background="#1a1a1a" Padding="16" BorderBrush="#333" BorderThickness="1">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="Frigate — клиент камер" FontSize="13" Foreground="#ccc"/>
+                        <TextBlock Text="Версия 1.0" FontSize="11" Foreground="#888"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

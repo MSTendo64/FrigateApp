@@ -1,0 +1,51 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:FrigateApp.ViewModels"
+             xmlns:conv="using:Avalonia.Data.Converters"
+             xmlns:models="using:FrigateApp.Models"
+             x:Class="FrigateApp.Views.LoginView"
+             x:DataType="vm:LoginViewModel">
+
+    <Panel Width="380" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <Border Background="#1a1a1a" Padding="24" BorderBrush="#333" BorderThickness="1">
+            <StackPanel Spacing="12">
+                <TextBlock Text="Вход" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,4"/>
+
+                <TextBlock Text="Профиль" FontSize="11" Foreground="#888"/>
+                <ComboBox ItemsSource="{Binding SavedProfiles}"
+                          SelectedItem="{Binding SelectedProfile}"
+                          PlaceholderText="Выберите или введите"
+                          HorizontalAlignment="Stretch"
+                          Background="#111" BorderBrush="#333"/>
+
+                <TextBox Watermark="Адрес сервера"
+                         Text="{Binding ServerUrl}"
+                         IsReadOnly="{Binding IsBusy}"
+                         Background="#111" BorderBrush="#333"/>
+
+                <TextBox Watermark="Имя пользователя"
+                         Text="{Binding Username}"
+                         IsReadOnly="{Binding IsBusy}"
+                         Background="#111" BorderBrush="#333"/>
+
+                <TextBox Watermark="Пароль"
+                         PasswordChar="●"
+                         Text="{Binding Password}"
+                         IsReadOnly="{Binding IsBusy}"
+                         Background="#111" BorderBrush="#333"/>
+
+                <CheckBox Content="Запомнить пароль" IsChecked="{Binding RememberPassword}" IsEnabled="{Binding !IsBusy}" Foreground="#ccc"/>
+
+                <Button Content="Войти" Command="{Binding LoginCommand}" Margin="0,4,0,0" HorizontalAlignment="Left"/>
+
+                <TextBlock Text="{Binding ErrorMessage}"
+                           Foreground="Orange"
+                           IsVisible="{Binding ErrorMessage, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}"
+                           TextWrapping="Wrap"
+                           FontSize="12"/>
+
+                <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsBusy}" Height="2"/>
+            </StackPanel>
+        </Border>
+    </Panel>
+</UserControl>

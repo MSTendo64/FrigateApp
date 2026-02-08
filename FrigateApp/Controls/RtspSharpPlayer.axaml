@@ -1,0 +1,16 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="FrigateApp.Controls.RtspSharpPlayer"
+             ClipToBounds="True"
+             Background="Black">
+
+    <Panel x:Name="RootPanel" RenderTransformOrigin="0,0">
+        <Panel.RenderTransform>
+            <TransformGroup>
+                <ScaleTransform ScaleX="1" ScaleY="1"/>
+                <TranslateTransform X="0" Y="0"/>
+            </TransformGroup>
+        </Panel.RenderTransform>
+        <Image x:Name="FrameImage" Stretch="Uniform"/>
+    </Panel>
+</UserControl>
