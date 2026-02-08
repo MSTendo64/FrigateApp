@@ -6,7 +6,8 @@
              xmlns:media="using:Avalonia.Media"
              xmlns:localconv="using:FrigateApp.Converters"
              x:Class="FrigateApp.Views.CamerasView"
-             x:DataType="vm:CamerasViewModel">
+             x:DataType="vm:CamerasViewModel"
+             x:CompileBindings="True">
 
     <Grid RowDefinitions="Auto,*,Auto">
         <!-- Верхняя панель (уменьшенная) -->

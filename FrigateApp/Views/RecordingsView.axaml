@@ -5,7 +5,8 @@
              xmlns:localconv="using:FrigateApp.Converters"
              xmlns:controls="using:FrigateApp.Controls"
              x:Class="FrigateApp.Views.RecordingsView"
-             x:DataType="vm:RecordingsViewModel">
+             x:DataType="vm:RecordingsViewModel"
+             x:CompileBindings="True">
 
     <Grid RowDefinitions="Auto,Auto,*">
         <Border Grid.Row="0" Background="#1a1a1a" Padding="12,8" BorderBrush="#333" BorderThickness="0,0,0,1">

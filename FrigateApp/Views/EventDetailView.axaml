@@ -4,7 +4,8 @@
              xmlns:conv="using:Avalonia.Data.Converters"
              xmlns:localconv="using:FrigateApp.Converters"
              x:Class="FrigateApp.Views.EventDetailView"
-             x:DataType="vm:EventDetailViewModel">
+             x:DataType="vm:EventDetailViewModel"
+             x:CompileBindings="True">
 
     <Grid RowDefinitions="Auto,*">
         <Border Grid.Row="0" Background="#1a1a1a" Padding="12,8" BorderBrush="#333" BorderThickness="0,0,0,1">

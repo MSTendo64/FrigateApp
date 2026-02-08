@@ -4,7 +4,8 @@
              xmlns:conv="using:Avalonia.Data.Converters"
              xmlns:models="using:FrigateApp.Models"
              x:Class="FrigateApp.Views.LoginView"
-             x:DataType="vm:LoginViewModel">
+             x:DataType="vm:LoginViewModel"
+             x:CompileBindings="True">
 
     <Panel Width="380" HorizontalAlignment="Center" VerticalAlignment="Center">
         <Border Background="#1a1a1a" Padding="24" BorderBrush="#333" BorderThickness="1">

@@ -3,7 +3,9 @@
              xmlns:vm="using:FrigateApp.ViewModels"
              xmlns:controls="using:FrigateApp.Controls"
              x:Class="FrigateApp.Views.CameraPlayerView"
-             x:DataType="vm:CameraPlayerViewModel">
+             x:DataType="vm:CameraPlayerViewModel"
+             x:CompileBindings="True">
+
 
     <Grid RowDefinitions="Auto,*">
         <Border Grid.Row="0" Background="#1a1a1a" Padding="12,8" BorderBrush="#333" BorderThickness="0,0,0,1">

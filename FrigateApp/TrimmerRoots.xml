@@ -1,0 +1,14 @@
+﻿<linker>
+	<assembly fullname="FrigateApp" preserve="all" />
+	<assembly fullname="Avalonia.Controls" preserve="all" />
+	<assembly fullname="Avalonia.Themes.Fluent" preserve="all" />
+	<assembly fullname="Avalonia.Markup.Xaml" preserve="all" />
+
+	<!-- Явно сохраняем типы View -->
+	<type fullname="FrigateApp.Views.LoginView" preserve="all" />
+	<type fullname="FrigateApp.ViewModels.LoginViewModel" preserve="all" />
+
+	<!-- Сохраняем все типы в пространстве имен Views -->
+	<type fullname="FrigateApp.Views.*" preserve="all" />
+	<type fullname="FrigateApp.ViewModels.*" preserve="all" />
+</linker>
