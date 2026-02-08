@@ -37,7 +37,3 @@ This is a work in progress. Version `0.1-ALPHA` was just released, and many feat
 ## Goals
 
 The primary goal is to create a straightforward, performant desktop alternative to the web interface for local Frigate server management.
-
-## Contributing
-
-As this project is in its infancy, any feedback, suggestions, or questions are welcome. Feel free to open an issue to start a discussion.
