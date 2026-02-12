@@ -2,9 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Text.Json;
 using System.Threading.Tasks;
 using FrigateApp.Models;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 
 namespace FrigateApp.Services;
 
@@ -14,10 +15,10 @@ namespace FrigateApp.Services;
 /// </summary>
 public class UserPreferencesService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerSettings JsonSettings = new()
     {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        Formatting = Formatting.Indented,
+        ContractResolver = new CamelCasePropertyNamesContractResolver()
     };
 
     private readonly string _dir;
@@ -85,7 +86,7 @@ public class UserPreferencesService
         try
         {
             var json = File.ReadAllText(_filePath);
-            var list = JsonSerializer.Deserialize<List<SavedProfile>>(json);
+            var list = JsonConvert.DeserializeObject<List<SavedProfile>>(json);
             _profiles = list ?? new List<SavedProfile>();
         }
         catch
@@ -98,7 +99,7 @@ public class UserPreferencesService
     {
         try
         {
-            var json = JsonSerializer.Serialize(_profiles, JsonOptions);
+            var json = JsonConvert.SerializeObject(_profiles, JsonSettings);
             File.WriteAllText(_filePath, json);
         }
         catch
@@ -158,7 +159,7 @@ public class UserPreferencesService
         try
         {
             var json = File.ReadAllText(_cameraZoomsPath);
-            var raw = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, CameraZoomState>>>(json, JsonOptions);
+            var raw = JsonConvert.DeserializeObject<Dictionary<string, Dictionary<string, CameraZoomState>>>(json, JsonSettings);
             _cameraZoomsByProfileAndGroup = raw ?? new Dictionary<string, Dictionary<string, CameraZoomState>>();
         }
         catch
@@ -201,7 +202,7 @@ public class UserPreferencesService
         };
         try
         {
-            var json = JsonSerializer.Serialize(_cameraZoomsByProfileAndGroup, JsonOptions);
+            var json = JsonConvert.SerializeObject(_cameraZoomsByProfileAndGroup, JsonSettings);
             File.WriteAllText(_cameraZoomsPath, json);
         }
         catch
@@ -219,7 +220,7 @@ public class UserPreferencesService
         try
         {
             var json = File.ReadAllText(_tileScalePath);
-            var raw = JsonSerializer.Deserialize<Dictionary<string, double>>(json, JsonOptions);
+            var raw = JsonConvert.DeserializeObject<Dictionary<string, double>>(json, JsonSettings);
             _tileScaleByProfile = raw ?? new Dictionary<string, double>();
         }
         catch
@@ -242,7 +243,7 @@ public class UserPreferencesService
         _tileScaleByProfile[profileKey] = scale;
         try
         {
-            var json = JsonSerializer.Serialize(_tileScaleByProfile, JsonOptions);
+            var json = JsonConvert.SerializeObject(_tileScaleByProfile, JsonSettings);
             File.WriteAllText(_tileScalePath, json);
         }
         catch

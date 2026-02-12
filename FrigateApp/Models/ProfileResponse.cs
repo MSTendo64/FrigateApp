@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using System.Text.Json.Serialization;
+using Newtonsoft.Json;
 
 namespace FrigateApp.Models;
 
@@ -8,12 +8,12 @@ namespace FrigateApp.Models;
 /// </summary>
 public class ProfileResponse
 {
-    [JsonPropertyName("username")]
+    [JsonProperty("username")]
     public string? Username { get; set; }
 
-    [JsonPropertyName("role")]
+    [JsonProperty("role")]
     public string? Role { get; set; }
 
-    [JsonPropertyName("allowed_cameras")]
+    [JsonProperty("allowed_cameras")]
     public List<string>? AllowedCameras { get; set; }
 }

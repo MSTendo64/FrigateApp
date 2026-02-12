@@ -5,28 +5,28 @@ using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using FrigateApp.Models;
 using FrigateApp.Services;
 
 namespace FrigateApp.ViewModels;
 
 /// <summary>
-/// ViewModel для полноэкранного проигрывателя RTSP камеры.
+/// ViewModel для полноэкранного проигрывателя камеры.
 /// Зум и перетягивание реализованы внутри CameraPlayer контрола.
-/// Временно показывает MJPEG пока RTSP подключается.
+/// Источник видео — live-поток Frigate по WebSocket (wss, fMP4).
 /// </summary>
 public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
 {
     [ObservableProperty]
     private string _cameraName = "";
 
+    /// <summary>Имя для отображения: friendly_name из конфига, если задан, иначе системное имя.</summary>
     [ObservableProperty]
-    private string? _rtspUrl;
+    private string _displayName = "";
 
+    /// <summary>Полный путь к локальному файлу с live-потоком (fMP4), записанным из WebSocket.</summary>
     [ObservableProperty]
-    private Bitmap? _mjpegFrame;
-
-    [ObservableProperty]
-    private bool _showMjpeg = true;
+    private string? _videoFilePath;
 
     [ObservableProperty]
     private string _statusText = "Загрузка...";
@@ -53,38 +53,21 @@ public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
     [ObservableProperty]
     private double _panY;
 
-    /// <summary>Размер отображаемого MJPEG (после поворота) для расчёта зума/пана.</summary>
-    [ObservableProperty]
-    private double _mjpegDisplayWidth;
-
-    [ObservableProperty]
-    private double _mjpegDisplayHeight;
-
-    /// <summary>Показывать RTSP плеер (LibVLC) — когда MJPEG скрыт.</summary>
-    public bool ShowRtspPlayer => !ShowMjpeg;
-
-    /// <summary>На Linux использовать RtspClientSharp вместо LibVLC для RTSP.</summary>
-    public bool UseRtspSharpPlayer => RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
-
-    /// <summary>Показывать LibVLC плеер (только не на Linux, когда RTSP активен).</summary>
-    public bool ShowLibVlcPlayer => ShowRtspPlayer && !UseRtspSharpPlayer;
-
-    /// <summary>Показывать RtspSharp плеер (только на Linux, когда RTSP активен).</summary>
-    public bool ShowRtspSharpPlayer => ShowRtspPlayer && UseRtspSharpPlayer;
-
     private readonly FrigateApiService _api;
     private readonly Action _onBack;
-    private MjpegStreamService? _mjpegStream;
+    private WssFmp4StreamService? _wssStream;
     private bool _disposed;
+    private bool _triedSubFallback;
 
     public CameraPlayerViewModel(string cameraName, FrigateApiService api, Action onBack)
     {
         _cameraName = cameraName ?? "";
+        _displayName = _cameraName;
         _api = api ?? throw new ArgumentNullException(nameof(api));
         _onBack = onBack ?? throw new ArgumentNullException(nameof(onBack));
     }
 
-    /// <summary>Загрузить RTSP URL и запустить временный MJPEG поток.</summary>
+    /// <summary>Получить настройки камеры и запустить live-поток по WebSocket.</summary>
     public async Task StartAsync()
     {
         System.Diagnostics.Debug.WriteLine($"StartAsync called for camera: {CameraName}");
@@ -92,42 +75,29 @@ public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
         IsLoading = true;
         HasError = false;
         ErrorText = null;
-        StatusText = "Подключение...";
-        ShowMjpeg = true;
-
-        // Запускаем MJPEG как временный fallback
-        StartMjpeg();
+        StatusText = "Подключение к камере...";
 
         try
         {
             System.Diagnostics.Debug.WriteLine("Requesting config from API...");
             var config = await _api.GetConfigAsync().ConfigureAwait(true);
             
-            // Получаем rotation из конфига
-            if (config.Cameras != null && config.Cameras.TryGetValue(CameraName, out var camConfig))
+            CameraConfig? camConfig = null;
+            if (config.Cameras != null && config.Cameras.TryGetValue(CameraName, out camConfig))
             {
                 Rotation = camConfig.Rotate;
-                System.Diagnostics.Debug.WriteLine($"Camera rotation: {Rotation}°");
+                DisplayName = !string.IsNullOrWhiteSpace(camConfig.FriendlyName) ? camConfig.FriendlyName : CameraName;
+                System.Diagnostics.Debug.WriteLine($"Camera rotation: {Rotation}°, display name: {DisplayName}");
             }
-
-            System.Diagnostics.Debug.WriteLine("Requesting RTSP URL from API...");
-            var url = await _api.GetCameraRtspUrlAsync(CameraName).ConfigureAwait(true);
-            
-            System.Diagnostics.Debug.WriteLine($"Received URL: {url}");
-            
-            if (string.IsNullOrEmpty(url))
+            else
             {
-                System.Diagnostics.Debug.WriteLine("URL is empty or null");
-                HasError = true;
-                ErrorText = "RTSP URL не найден в конфигурации камеры";
-                StatusText = "Ошибка";
-                IsLoading = false;
-                return;
+                DisplayName = CameraName;
             }
 
-            System.Diagnostics.Debug.WriteLine($"Setting RtspUrl property to: {url}");
-            RtspUrl = url;
-            StatusText = "RTSP подключение...";
+            var mainStreamName = FrigateApiService.GetStreamNameForLive(camConfig, CameraName, useSubStream: false);
+            System.Diagnostics.Debug.WriteLine("Starting WebSocket fMP4 stream...");
+            StartWssStream(mainStreamName);
+            StatusText = "Ожидание потока...";
             IsLoading = false;
             System.Diagnostics.Debug.WriteLine("StartAsync completed successfully");
         }
@@ -141,40 +111,65 @@ public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private void StartMjpeg()
+    private void StartWssStream(string streamName)
     {
-        if (_mjpegStream != null) return;
-        
-        _mjpegStream = new MjpegStreamService(_api);
-        _mjpegStream.FrameReady += OnMjpegFrameReady;
-        _mjpegStream.ErrorOccurred += OnMjpegError;
-        _mjpegStream.Start(CameraName);
-        System.Diagnostics.Debug.WriteLine("MJPEG stream started");
+        if (_wssStream != null) return;
+
+        _wssStream = new WssFmp4StreamService(_api);
+        _wssStream.FileReady += OnWssFileReady;
+        _wssStream.ErrorOccurred += OnWssError;
+        _ = _wssStream.StartAsync(streamName);
+        System.Diagnostics.Debug.WriteLine($"WebSocket fMP4 stream started: {streamName}");
     }
 
-    private void OnMjpegFrameReady(Bitmap? bitmap)
+    private void OnWssFileReady(string filePath)
     {
-        if (_disposed || bitmap == null) return;
-        
-        // Применяем поворот если нужно
-        var rotatedBitmap = Rotation != 0 ? RotateBitmap(bitmap, Rotation) : bitmap;
-        
-        MjpegFrame = rotatedBitmap;
-        var ps = rotatedBitmap.PixelSize;
-        MjpegDisplayWidth = ps.Width;
-        MjpegDisplayHeight = ps.Height;
-        
-        // Если применили поворот, освобождаем исходный bitmap
-        if (rotatedBitmap != bitmap)
-            bitmap.Dispose();
+        if (_disposed) return;
+        System.Diagnostics.Debug.WriteLine($"WebSocket live file ready: {filePath}");
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (_disposed) return;
+            VideoFilePath = filePath;
+            IsLoading = false;
+            StatusText = "Поток подключён";
+        });
     }
 
-    private void OnMjpegError(string? message)
+    private void OnWssError(string? message)
     {
-        System.Diagnostics.Debug.WriteLine($"MJPEG error: {message}");
+        System.Diagnostics.Debug.WriteLine($"WebSocket fMP4 error: {message}");
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (_disposed) return;
+            if (!_triedSubFallback)
+            {
+                _triedSubFallback = true;
+                _wssStream?.Stop();
+                _wssStream?.Dispose();
+                _wssStream = null;
+                StatusText = "Повтор (sub-поток)…";
+                HasError = false;
+                ErrorText = null;
+                _ = _api.GetConfigAsync().ContinueWith(t =>
+                {
+                    if (_disposed || !t.IsCompletedSuccessfully || t.Result?.Cameras == null) return;
+                    var camConfig = t.Result.Cameras.TryGetValue(CameraName, out var c) ? c : null;
+                    var subStreamName = FrigateApiService.GetStreamNameForLive(camConfig, CameraName, useSubStream: true);
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    {
+                        if (_disposed) return;
+                        StartWssStream(subStreamName);
+                    });
+                });
+                return;
+            }
+            HasError = true;
+            ErrorText = message;
+            StatusText = "Ошибка потока";
+        });
     }
 
-    /// <summary>Зум колёсиком относительно точки (для MJPEG). viewW/viewH — размер области, imgW/imgH — размер изображения.</summary>
+    /// <summary>Зум колёсиком относительно точки (для MJPEG / растровых кадров). viewW/viewH — размер области, imgW/imgH — размер изображения.</summary>
     public void ZoomAt(double viewW, double viewH, double imgW, double imgH, double cursorX, double cursorY, double wheelDelta)
     {
         if (viewW <= 0 || viewH <= 0 || imgW <= 0 || imgH <= 0) return;
@@ -215,7 +210,7 @@ public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
         ClampPan(viewW, viewH, renderW, renderH);
     }
 
-    /// <summary>Сдвиг кадра (для MJPEG). После вызова View должен вызвать ClampPan с актуальными размерами.</summary>
+    /// <summary>Сдвиг кадра (для MJPEG / растровых кадров). После вызова View должен вызвать ClampPan с актуальными размерами.</summary>
     public void PanBy(double deltaX, double deltaY)
     {
         PanX += deltaX;
@@ -234,35 +229,23 @@ public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
         PanY = Math.Clamp(PanY, minPanY, 0);
     }
 
-    /// <summary>Вызывается из View когда RTSP начал показывать кадры.</summary>
-    public void OnRtspStarted()
+    /// <summary>Вызывается из View когда плеер начал показывать кадры.</summary>
+    public void OnVideoStarted()
     {
-        System.Diagnostics.Debug.WriteLine("RTSP started showing frames, stopping MJPEG");
-        ShowMjpeg = false;
-        StopMjpeg();
-        StatusText = "RTSP воспроизведение";
-        OnPropertyChanged(nameof(ShowRtspPlayer));
-        OnPropertyChanged(nameof(ShowLibVlcPlayer));
-        OnPropertyChanged(nameof(ShowRtspSharpPlayer));
+        System.Diagnostics.Debug.WriteLine("Live video started showing frames");
+        StatusText = "Воспроизведение";
     }
 
-    /// <summary>Вызывается из View при таймауте RtspSharp (нет JPEG-кадра — поток скорее всего H.264). Остаёмся на MJPEG.</summary>
-    public void OnRtspConnectionTimeout()
+    private void StopWssStream()
     {
-        System.Diagnostics.Debug.WriteLine("RTSP connection timeout (no JPEG frame), keeping MJPEG");
-        StatusText = "MJPEG (RTSP: поток не в формате JPEG или таймаут)";
-    }
-
-    private void StopMjpeg()
-    {
-        if (_mjpegStream != null)
+        if (_wssStream != null)
         {
-            _mjpegStream.FrameReady -= OnMjpegFrameReady;
-            _mjpegStream.ErrorOccurred -= OnMjpegError;
-            _mjpegStream.Stop();
-            _mjpegStream = null;
-            MjpegFrame = null;
-            System.Diagnostics.Debug.WriteLine("MJPEG stream stopped");
+            _wssStream.FileReady -= OnWssFileReady;
+            _wssStream.ErrorOccurred -= OnWssError;
+            _wssStream.Stop();
+            _wssStream.Dispose();
+            _wssStream = null;
+            System.Diagnostics.Debug.WriteLine("WebSocket fMP4 stream stopped");
         }
     }
 
@@ -277,175 +260,6 @@ public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        StopMjpeg();
+        StopWssStream();
     }
-
-    #region Bitmap Rotation
-
-    private static Bitmap RotateBitmap(Bitmap source, float angle)
-    {
-        var normalized = ((int)angle % 360 + 360) % 360;
-        return normalized switch
-        {
-            90 => RotateBitmap90(source),
-            180 => RotateBitmap180(source),
-            270 => RotateBitmap270(source),
-            _ => source
-        };
-    }
-
-    private static Bitmap RotateBitmap90(Bitmap source)
-    {
-        var width = source.PixelSize.Width;
-        var height = source.PixelSize.Height;
-        var pixelCount = width * height * 4;
-        
-        var srcPixels = ArrayPool<byte>.Shared.Rent(pixelCount);
-        try
-        {
-            unsafe
-            {
-                fixed (byte* ptr = srcPixels)
-                {
-                    source.CopyPixels(new Avalonia.PixelRect(0, 0, width, height), (nint)ptr, pixelCount, width * 4);
-                }
-            }
-
-            var newBitmap = new Avalonia.Media.Imaging.WriteableBitmap(
-                new Avalonia.PixelSize(height, width),
-                new Avalonia.Vector(96, 96),
-                Avalonia.Platform.PixelFormat.Bgra8888,
-                Avalonia.Platform.AlphaFormat.Premul);
-
-            using var dstBuffer = newBitmap.Lock();
-            unsafe
-            {
-                fixed (byte* srcPtr = srcPixels)
-                {
-                    var dstPtr = (byte*)dstBuffer.Address;
-                    
-                    for (var y = 0; y < height; y++)
-                    {
-                        var srcRowPtr = srcPtr + y * width * 4;
-                        for (var x = 0; x < width; x++)
-                        {
-                            var srcIdx = x * 4;
-                            var dstX = height - 1 - y;
-                            var dstY = x;
-                            var dstIdx = (dstY * height + dstX) * 4;
-                            *(uint*)(dstPtr + dstIdx) = *(uint*)(srcRowPtr + srcIdx);
-                        }
-                    }
-                }
-            }
-
-            return newBitmap;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(srcPixels);
-        }
-    }
-
-    private static Bitmap RotateBitmap180(Bitmap source)
-    {
-        var width = source.PixelSize.Width;
-        var height = source.PixelSize.Height;
-        var pixelCount = width * height * 4;
-        
-        var srcPixels = ArrayPool<byte>.Shared.Rent(pixelCount);
-        try
-        {
-            unsafe
-            {
-                fixed (byte* ptr = srcPixels)
-                {
-                    source.CopyPixels(new Avalonia.PixelRect(0, 0, width, height), (nint)ptr, pixelCount, width * 4);
-                }
-            }
-
-            var newBitmap = new Avalonia.Media.Imaging.WriteableBitmap(
-                new Avalonia.PixelSize(width, height),
-                new Avalonia.Vector(96, 96),
-                Avalonia.Platform.PixelFormat.Bgra8888,
-                Avalonia.Platform.AlphaFormat.Premul);
-
-            using var dstBuffer = newBitmap.Lock();
-            unsafe
-            {
-                fixed (byte* srcPtr = srcPixels)
-                {
-                    var dstPtr = (byte*)dstBuffer.Address;
-                    var totalPixels = width * height;
-                    
-                    for (var i = 0; i < totalPixels; i++)
-                    {
-                        var srcIdx = i * 4;
-                        var dstIdx = (totalPixels - 1 - i) * 4;
-                        *(uint*)(dstPtr + dstIdx) = *(uint*)(srcPtr + srcIdx);
-                    }
-                }
-            }
-
-            return newBitmap;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(srcPixels);
-        }
-    }
-
-    private static Bitmap RotateBitmap270(Bitmap source)
-    {
-        var width = source.PixelSize.Width;
-        var height = source.PixelSize.Height;
-        var pixelCount = width * height * 4;
-        
-        var srcPixels = ArrayPool<byte>.Shared.Rent(pixelCount);
-        try
-        {
-            unsafe
-            {
-                fixed (byte* ptr = srcPixels)
-                {
-                    source.CopyPixels(new Avalonia.PixelRect(0, 0, width, height), (nint)ptr, pixelCount, width * 4);
-                }
-            }
-
-            var newBitmap = new Avalonia.Media.Imaging.WriteableBitmap(
-                new Avalonia.PixelSize(height, width),
-                new Avalonia.Vector(96, 96),
-                Avalonia.Platform.PixelFormat.Bgra8888,
-                Avalonia.Platform.AlphaFormat.Premul);
-
-            using var dstBuffer = newBitmap.Lock();
-            unsafe
-            {
-                fixed (byte* srcPtr = srcPixels)
-                {
-                    var dstPtr = (byte*)dstBuffer.Address;
-                    for (var y = 0; y < height; y++)
-                    {
-                        var srcRowPtr = srcPtr + y * width * 4;
-                        for (var x = 0; x < width; x++)
-                        {
-                            var srcIdx = x * 4;
-                            var dstX = y;
-                            var dstY = width - 1 - x;
-                            var dstIdx = (dstY * height + dstX) * 4;
-                            *(uint*)(dstPtr + dstIdx) = *(uint*)(srcRowPtr + srcIdx);
-                        }
-                    }
-                }
-            }
-
-            return newBitmap;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(srcPixels);
-        }
-    }
-
-    #endregion
 }

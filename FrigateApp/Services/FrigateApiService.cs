@@ -4,10 +4,11 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Net.Http.Json;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using FrigateApp.Models;
+using Newtonsoft.Json;
 
 namespace FrigateApp.Services;
 
@@ -19,6 +20,7 @@ public class FrigateApiService
 {
     private readonly HttpClient _http;
     private readonly string _baseUrl;
+    private readonly CookieContainer? _cookieContainer;
     
     // Кеширование конфигурации (обновляется раз в минуту)
     private FrigateConfigResponse? _cachedConfig;
@@ -38,15 +40,18 @@ public class FrigateApiService
         if (http != null)
         {
             _http = http;
+            _cookieContainer = null;
         }
         else
         {
+            _cookieContainer = new CookieContainer();
             var handler = new SocketsHttpHandler
             {
                 PooledConnectionLifetime = TimeSpan.FromMinutes(2),
                 PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1),
                 MaxConnectionsPerServer = 20, // Увеличено для параллельных запросов
                 UseCookies = true,
+                CookieContainer = _cookieContainer,
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
                 SslOptions = new System.Net.Security.SslClientAuthenticationOptions
                 {
@@ -75,7 +80,8 @@ public class FrigateApiService
     public async Task LoginAsync(string user, string password, CancellationToken ct = default)
     {
         var body = new { user, password };
-        using var content = JsonContent.Create(body);
+        var json = JsonConvert.SerializeObject(body);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
         var request = new HttpRequestMessage(HttpMethod.Post, "login") { Content = content };
         var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
 
@@ -108,7 +114,8 @@ public class FrigateApiService
                 return _cachedConfig;
             }
 
-            var config = await _http.GetFromJsonAsync<FrigateConfigResponse>("config", ct).ConfigureAwait(false);
+            var configJson = await _http.GetStringAsync("config", ct).ConfigureAwait(false);
+            var config = JsonConvert.DeserializeObject<FrigateConfigResponse>(configJson);
             _cachedConfig = config ?? new FrigateConfigResponse();
             _configCacheTime = DateTime.UtcNow;
             return _cachedConfig;
@@ -129,70 +136,77 @@ public class FrigateApiService
     }
 
     /// <summary>
-    /// Получить RTSP URL для камеры из конфигурации (с ролью "detect" или первый доступный).
-    /// Fallback: go2rtc stream если конфигурация недоступна.
+    /// Заголовок Cookie для запросов к тому же хосту (например WebSocket /live/mse/api/ws).
+    /// Нужен для авторизации wss: nginx auth_request проверяет cookie frigate_token.
     /// </summary>
-    public async Task<string?> GetCameraRtspUrlAsync(string cameraName, CancellationToken ct = default)
+    public string GetCookieHeader()
     {
-        try
-        {
-            System.Diagnostics.Debug.WriteLine($"[GetCameraRtspUrlAsync] Requesting config for camera: {cameraName}");
-            
-            var config = await GetConfigAsync(ct).ConfigureAwait(false);
-            
-            System.Diagnostics.Debug.WriteLine($"[GetCameraRtspUrlAsync] Config loaded. Cameras: {config.Cameras?.Count ?? 0}");
-            
-            if (config.Cameras == null || !config.Cameras.TryGetValue(cameraName, out var camConfig))
-            {
-                var available = config.Cameras != null ? string.Join(", ", config.Cameras.Keys) : "none";
-                System.Diagnostics.Debug.WriteLine($"[GetCameraRtspUrlAsync] Camera '{cameraName}' NOT FOUND. Available: {available}");
-                
-                // Fallback: пробуем go2rtc stream (Frigate перенаправляет через go2rtc)
-                var fallbackUrl = $"rtsp://localhost:8554/{cameraName}";
-                System.Diagnostics.Debug.WriteLine($"[GetCameraRtspUrlAsync] Using go2rtc fallback: {fallbackUrl}");
-                return fallbackUrl;
-            }
-
-            var inputs = camConfig.Ffmpeg?.Inputs;
-            if (inputs == null || inputs.Count == 0)
-            {
-                System.Diagnostics.Debug.WriteLine($"[GetCameraRtspUrlAsync] No ffmpeg inputs for '{cameraName}'");
-                
-                // Fallback: go2rtc
-                var fallbackUrl = $"rtsp://localhost:8554/{cameraName}";
-                System.Diagnostics.Debug.WriteLine($"[GetCameraRtspUrlAsync] Using go2rtc fallback: {fallbackUrl}");
-                return fallbackUrl;
-            }
-
-            System.Diagnostics.Debug.WriteLine($"[GetCameraRtspUrlAsync] Found {inputs.Count} inputs for camera");
-
-            // Ищем input с ролью "detect" (основной поток)
-            var detectInput = inputs.Find(i => i.Roles?.Contains("detect") == true);
-            if (detectInput != null)
-            {
-                System.Diagnostics.Debug.WriteLine($"[GetCameraRtspUrlAsync] SUCCESS - Found detect input: {detectInput.Path}");
-                return detectInput.Path;
-            }
-
-            // Или берём первый доступный
-            var url = inputs[0].Path;
-            System.Diagnostics.Debug.WriteLine($"[GetCameraRtspUrlAsync] SUCCESS - Using first input: {url}");
-            return url;
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"[GetCameraRtspUrlAsync] EXCEPTION: {ex.Message}");
-            System.Diagnostics.Debug.WriteLine($"[GetCameraRtspUrlAsync] Stack: {ex.StackTrace}");
-            throw;
-        }
+        if (_cookieContainer == null) return "";
+        var uri = new Uri(_baseUrl.TrimEnd('/'));
+        var cookieHeader = _cookieContainer.GetCookieHeader(uri);
+        return cookieHeader ?? "";
     }
+
+    /// <summary>
+    /// URL WebSocket для MSE-потока — как в вебе: baseUrl (http→ws) + live/mse/api/ws?src={streamName}.
+    /// streamName — имя потока go2rtc из camera.live.streams (например cam1_main, cam1_sub).
+    /// </summary>
+    public string GetLiveMseWebSocketUrl(string streamName)
+    {
+        if (string.IsNullOrWhiteSpace(streamName))
+            throw new ArgumentException("Stream name is required.", nameof(streamName));
+        var wsBase = GetWebSocketBaseUrl();
+        return $"{wsBase}/live/mse/api/ws?src={Uri.EscapeDataString(streamName)}";
+    }
+
+    /// <summary>Базовый URL для WebSocket (ws/wss + хост без /api).</summary>
+    private string GetWebSocketBaseUrl()
+    {
+        var url = _baseUrl.TrimEnd('/');
+        if (url.EndsWith("/api", StringComparison.OrdinalIgnoreCase))
+            url = url[..^4];
+        if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            url = "ws://" + url.Substring("http://".Length);
+        else if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            url = "wss://" + url.Substring("https://".Length);
+        return url.TrimEnd('/');
+    }
+
+    /// <summary>
+    /// Имя потока для live: из camera.live.streams по ключу (sub/main) или fallback cameraName_sub / cameraName_main.
+    /// Как в вебе: streamName = values из live.streams, для плиток — sub, для полноэкрана — main.
+    /// </summary>
+    public static string GetStreamNameForLive(CameraConfig? camera, string cameraName, bool useSubStream)
+    {
+        var streams = camera?.Live?.Streams;
+        if (streams != null && streams.Count > 0)
+        {
+            var key = useSubStream ? "sub" : "main";
+            if (streams.TryGetValue(key, out var name) && !string.IsNullOrEmpty(name))
+                return name;
+            var values = streams.Values.ToList();
+            if (useSubStream && values.Count > 0)
+                return values[0];
+            if (!useSubStream && values.Count > 0)
+                return values[values.Count - 1];
+        }
+        // Без конфига: для main часто поток под именем камеры (cam1), при необходимости WssFmp4 сделает повтор с _main
+        return useSubStream ? $"{cameraName}_sub" : cameraName;
+    }
+
+    /// <summary>
+    /// URL главного WebSocket Frigate (ws://host/ws или wss://host/ws).
+    /// Подключение с cookie frigate_token; сервер присылает JSON с topic/payload (onConnect, camera_activity и т.д.).
+    /// </summary>
+    public string GetMainWebSocketUrl() => $"{GetWebSocketBaseUrl()}/ws";
 
     /// <summary>
     /// GET /api/profile — профиль и разрешённые камеры. Требует авторизации.
     /// </summary>
     public async Task<ProfileResponse> GetProfileAsync(CancellationToken ct = default)
     {
-        var profile = await _http.GetFromJsonAsync<ProfileResponse>("profile", ct).ConfigureAwait(false);
+        var profileJson = await _http.GetStringAsync("profile", ct).ConfigureAwait(false);
+        var profile = JsonConvert.DeserializeObject<ProfileResponse>(profileJson);
         return profile ?? new ProfileResponse();
     }
 
@@ -237,17 +251,6 @@ public class FrigateApiService
         {
             _previewThrottle.Release();
         }
-    }
-
-    /// <summary>
-    /// Поток MJPEG: GET /api/{cameraName}?fps=...&height=... — multipart/x-mixed-replace.
-    /// </summary>
-    public async Task<Stream> GetMjpegStreamAsync(string cameraName, int fps = 15, int height = 720, CancellationToken ct = default)
-    {
-        var url = $"{Uri.EscapeDataString(cameraName)}?fps={fps}&height={height}";
-        var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -301,21 +304,24 @@ public class FrigateApiService
         if (after.HasValue) query.Add($"after={after.Value}");
         if (before.HasValue) query.Add($"before={before.Value}");
         var url = "events?" + string.Join("&", query);
-        var list = await _http.GetFromJsonAsync<List<EventDto>>(url, ct).ConfigureAwait(false);
+        var listJson = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
+        var list = JsonConvert.DeserializeObject<List<EventDto>>(listJson);
         return list ?? new List<EventDto>();
     }
 
     /// <summary>GET /api/events/summary — сводка по дням (для таймлайна).</summary>
     public async Task<List<EventsSummaryItemDto>> GetEventsSummaryAsync(CancellationToken ct = default)
     {
-        var list = await _http.GetFromJsonAsync<List<EventsSummaryItemDto>>("events/summary", ct).ConfigureAwait(false);
+        var listJson = await _http.GetStringAsync("events/summary", ct).ConfigureAwait(false);
+        var list = JsonConvert.DeserializeObject<List<EventsSummaryItemDto>>(listJson);
         return list ?? new List<EventsSummaryItemDto>();
     }
 
     /// <summary>GET /api/events/{id} — одно событие.</summary>
     public async Task<EventDto?> GetEventByIdAsync(string eventId, CancellationToken ct = default)
     {
-        return await _http.GetFromJsonAsync<EventDto>($"events/{Uri.EscapeDataString(eventId)}", ct).ConfigureAwait(false);
+        var eventJson = await _http.GetStringAsync($"events/{Uri.EscapeDataString(eventId)}", ct).ConfigureAwait(false);
+        return JsonConvert.DeserializeObject<EventDto>(eventJson);
     }
 
     /// <summary>URL снимка события (с куками). GET /api/events/{id}/snapshot.jpg</summary>
@@ -345,7 +351,8 @@ public class FrigateApiService
     public async Task<Dictionary<string, bool>> GetRecordingsSummaryAsync(string cameras = "all", CancellationToken ct = default)
     {
         var url = "recordings/summary?cameras=" + Uri.EscapeDataString(cameras);
-        var dict = await _http.GetFromJsonAsync<Dictionary<string, bool>>(url, ct).ConfigureAwait(false);
+        var dictJson = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
+        var dict = JsonConvert.DeserializeObject<Dictionary<string, bool>>(dictJson);
         return dict ?? new Dictionary<string, bool>();
     }
 
@@ -353,7 +360,8 @@ public class FrigateApiService
     public async Task<List<RecordingsDaySummaryDto>> GetCameraRecordingsSummaryAsync(string cameraName, CancellationToken ct = default)
     {
         var url = $"{Uri.EscapeDataString(cameraName)}/recordings/summary";
-        var list = await _http.GetFromJsonAsync<List<RecordingsDaySummaryDto>>(url, ct).ConfigureAwait(false);
+        var listJson = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
+        var list = JsonConvert.DeserializeObject<List<RecordingsDaySummaryDto>>(listJson);
         return list ?? new List<RecordingsDaySummaryDto>();
     }
 
@@ -361,7 +369,8 @@ public class FrigateApiService
     public async Task<List<RecordingSegmentDto>> GetCameraRecordingsAsync(string cameraName, double after, double before, CancellationToken ct = default)
     {
         var url = $"{Uri.EscapeDataString(cameraName)}/recordings?after={after}&before={before}";
-        var list = await _http.GetFromJsonAsync<List<RecordingSegmentDto>>(url, ct).ConfigureAwait(false);
+        var listJson = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
+        var list = JsonConvert.DeserializeObject<List<RecordingSegmentDto>>(listJson);
         return list ?? new List<RecordingSegmentDto>();
     }
 

@@ -1,19 +1,19 @@
-using System.Text.Json.Serialization;
+using Newtonsoft.Json;
 
 namespace FrigateApp.Models;
 
 public class SavedProfile
 {
-    [JsonPropertyName("serverUrl")]
+    [JsonProperty("serverUrl")]
     public string ServerUrl { get; set; } = "";
 
-    [JsonPropertyName("username")]
+    [JsonProperty("username")]
     public string Username { get; set; } = "";
 
-    [JsonPropertyName("password")]
+    [JsonProperty("password")]
     public string? Password { get; set; }
 
-    [JsonPropertyName("displayName")]
+    [JsonProperty("displayName")]
     public string? DisplayName { get; set; }
 
     /// <summary>Отображаемое имя для списка (сервер + пользователь).</summary>

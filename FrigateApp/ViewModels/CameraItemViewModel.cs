@@ -13,8 +13,13 @@ namespace FrigateApp.ViewModels;
 
 public partial class CameraItemViewModel : ViewModelBase, IDisposable
 {
+    /// <summary>Системный идентификатор камеры (для API, кэша и т.д.).</summary>
     [ObservableProperty]
     private string _name = "";
+
+    /// <summary>Имя для отображения: friendly_name из конфига, если задан, иначе системное имя.</summary>
+    [ObservableProperty]
+    private string _displayName = "";
 
     [ObservableProperty]
     private Bitmap? _snapshot;
@@ -38,6 +43,10 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
     [ObservableProperty]
     private bool _isZoomEnabled;
 
+    /// <summary>Ширина плитки камеры (для фиксации размера ячейки в сетке).</summary>
+    [ObservableProperty]
+    private double _tileWidth = 240;
+
     /// <summary>Высота плитки камеры (зависит от вертикальности и масштаба).</summary>
     [ObservableProperty]
     private double _tileHeight = 160;
@@ -57,18 +66,20 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
     [ObservableProperty]
     private string _statsText = "";
 
+    /// <summary>Путь к локальному fMP4-файлу из wss sub-потока; когда задан — плитка показывает видео вместо снимка.</summary>
+    [ObservableProperty]
+    private string? _videoFilePath;
+
     private readonly FrigateApiService _api;
     private readonly CameraSnapshotCache? _snapshotCache;
-    // Оптимизация: адаптивная частота обновления
-    private TimeSpan _refreshInterval = TimeSpan.FromMilliseconds(2000);
+    private WssFmp4StreamService? _wssStream;
     private CancellationTokenSource? _cts;
     private bool _disposed;
-    private bool _isVisible = true; // Видимость камеры на экране
-    private int _failedAttempts = 0; // Счетчик неудачных попыток
-    private DateTime _lastSuccessfulUpdate = DateTime.UtcNow;
+    private bool _isVisible = true;
 
     private readonly Action? _onOpenPlayer;
     private readonly Action<CameraItemViewModel>? _onZoomChanged;
+    private readonly string _subStreamName;
 
     public CameraItemViewModel(
         string cameraName,
@@ -79,9 +90,13 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
         bool isZoomEnabled = false,
         CameraSnapshotCache? snapshotCache = null,
         float rotation = 0f,
-        double tileScale = 1.0)
+        double tileScale = 1.0,
+        string? friendlyName = null,
+        string? subStreamName = null)
     {
         Name = cameraName;
+        _subStreamName = !string.IsNullOrWhiteSpace(subStreamName) ? subStreamName : $"{cameraName}_sub";
+        DisplayName = !string.IsNullOrWhiteSpace(friendlyName) ? friendlyName : cameraName;
         _api = api ?? throw new ArgumentNullException(nameof(api));
         _onOpenPlayer = onOpenPlayer;
         _onZoomChanged = onZoomChanged;
@@ -146,164 +161,46 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
     public void SetVisibility(bool isVisible)
     {
         if (_isVisible == isVisible) return;
-        
         _isVisible = isVisible;
-        
-        // Адаптивная частота обновлений:
-        // - Видимые камеры: 2 сек (актуальное превью)
-        // - Невидимые камеры: 60 сек (экономия ресурсов, но превью актуально в течение минуты)
-        _refreshInterval = isVisible 
-            ? TimeSpan.FromMilliseconds(2000) 
-            : TimeSpan.FromMilliseconds(60000);
-        
-        System.Diagnostics.Debug.WriteLine($"[{Name}] Visibility changed: {isVisible}, interval: {_refreshInterval.TotalSeconds}s");
+        System.Diagnostics.Debug.WriteLine($"[{Name}] Visibility changed: {isVisible}");
     }
 
     public void StartRefresh()
     {
-        _cts?.Cancel();
-        _cts = new CancellationTokenSource();
-        var ct = _cts.Token;
-        _ = RefreshLoopAsync(ct);
+        if (_disposed) return;
+        StopRefresh();
+        _wssStream = new WssFmp4StreamService(_api);
+        _wssStream.FileReady += OnWssFileReady;
+        _wssStream.ErrorOccurred += OnWssError;
+        VideoFilePath = null;
+        _ = _wssStream.StartAsync(_subStreamName);
+        StatsText = "WSS • подключение…";
     }
 
-    private async Task RefreshLoopAsync(CancellationToken ct)
+    private void OnWssFileReady(string filePath)
     {
-        // Оптимизация: случайная задержка старта (0-500мс) для распределения нагрузки
-        // (уменьшено с 2000мс, т.к. теперь есть throttling на уровне API)
-        try
+        if (_disposed) return;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            var rnd = new Random();
-            await Task.Delay(rnd.Next(0, 500), ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-
-        while (!ct.IsCancellationRequested && !_disposed)
-        {
-            try
-            {
-                // Адаптивное качество:
-                // - Видимые камеры: 480p (хорошее качество для мониторинга)
-                // - Невидимые камеры: 360p (достаточно для превью, но легче для сервера)
-                var height = _isVisible ? 480 : 360;
-                var requestStart = DateTime.UtcNow;
-                var bytes = await _api.GetLatestFrameBytesAsync(Name, height, ct).ConfigureAwait(false);
-                if (ct.IsCancellationRequested || _disposed) return;
-                if (bytes != null && bytes.Length > 0)
-                {
-                    try
-                    {
-                        // Оптимизация: декодирование на пуле потоков с более низким приоритетом
-                        var (bmp, origWidth, origHeight) = await DecodeImageAsync(bytes, ct).ConfigureAwait(true);
-                        
-                        if (ct.IsCancellationRequested || _disposed)
-                        {
-                            bmp?.Dispose();
-                            return;
-                        }
-                        
-                                    // НЕ диспозим старый bitmap сразу — Avalonia может ещё его рендерить
-                                    // Пусть GC сам очистит, когда UI больше не использует
-                                    Snapshot = bmp;
-                                    
-                                    // Определяем вертикальность ТОЛЬКО если она еще не сохранена в кеше
-                                    var cachedIsVertical = _snapshotCache?.GetIsVertical(Name);
-                                    if (!cachedIsVertical.HasValue)
-                                    {
-                                        // Определяем вертикальность с учетом ОРИГИНАЛЬНЫХ размеров + rotation
-                                        var isVerticalNow = IsVerticalOrientation(origWidth, origHeight, Rotation);
-                                        
-                                        IsVertical = isVerticalNow;
-                                        UpdateTileHeight(isVerticalNow);
-                                        
-                                        // Сохраняем в кеш чтобы не пересчитывать при переходах
-                                        _snapshotCache?.SetIsVertical(Name, isVerticalNow);
-                                    }
-                                    
-                                    // Сохранить bitmap в кэш для мгновенного появления при переходе между группами
-                                    _snapshotCache?.Set(Name, bmp);
-                                    
-                                    HasError = false;
-                                    ErrorText = "";
-                                    _failedAttempts = 0;
-                                    _lastSuccessfulUpdate = DateTime.UtcNow;
-
-                                    // Статистика для отображения под плиткой (поток, задержка, трафик)
-                                    var delayMs = (int)(DateTime.UtcNow - requestStart).TotalMilliseconds;
-                                    var trafficKb = bytes.Length / 1024.0;
-                                    StatsText = $"Поток MJPEG • Задержка {delayMs} мс • Трафик {trafficKb:F1} КБ";
-                    }
-                    catch (Exception ex)
-                    {
-                        _failedAttempts++;
-                        HasError = true;
-                        ErrorText = $"Ошибка декодирования ({_failedAttempts})";
-                        System.Diagnostics.Debug.WriteLine($"[{Name}] Decode error: {ex.Message}");
-                    }
-                }
-                else
-                {
-                    _failedAttempts++;
-                    HasError = true;
-                    ErrorText = $"Нет данных ({_failedAttempts})";
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                if (!_disposed)
-                {
-                    HasError = true;
-                    ErrorText = ex.Message;
-                }
-            }
-
-            try
-            {
-                await Task.Delay(_refreshInterval, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-        }
+            if (_disposed) return;
+            VideoFilePath = filePath;
+            HasError = false;
+            ErrorText = "";
+            StatsText = "WSS";
+        });
     }
 
-    /// <summary>Оптимизированное декодирование изображения с минимальными аллокациями.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private Task<(Bitmap bmp, int origWidth, int origHeight)> DecodeImageAsync(byte[] bytes, CancellationToken ct)
+    private void OnWssError(string? message)
     {
-        return Task.Run(() =>
+        if (_disposed) return;
+        var msg = message ?? "Ошибка потока";
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            using var ms = new MemoryStream(bytes, writable: false);
-            var bitmap = new Bitmap(ms);
-            var w = bitmap.PixelSize.Width;
-            var h = bitmap.PixelSize.Height;
-            
-            // Поворачиваем изображение если нужно (кеш поворота в CameraSnapshotCache)
-            if (Rotation != 0)
-            {
-                // Проверяем кеш повернутого изображения
-                var rotatedKey = $"{Name}_rotated_{Rotation}";
-                var cachedRotated = _snapshotCache?.Get(rotatedKey);
-                if (cachedRotated != null && cachedRotated.PixelSize.Width > 0)
-                {
-                    bitmap.Dispose();
-                    return (cachedRotated, w, h);
-                }
-                
-                bitmap = RotateBitmap(bitmap, Rotation);
-                _snapshotCache?.Set(rotatedKey, bitmap);
-            }
-            
-            return (bitmap, w, h);
-        }, ct);
+            if (_disposed) return;
+            HasError = true;
+            ErrorText = msg;
+            StatsText = "WSS • ошибка";
+        });
     }
 
     public void StopRefresh()
@@ -311,6 +208,15 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;
+        if (_wssStream != null)
+        {
+            _wssStream.FileReady -= OnWssFileReady;
+            _wssStream.ErrorOccurred -= OnWssError;
+            _wssStream.Stop();
+            _wssStream.Dispose();
+            _wssStream = null;
+        }
+        VideoFilePath = null;
     }
 
     public void Dispose()
@@ -318,8 +224,6 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
         if (_disposed) return;
         _disposed = true;
         StopRefresh();
-        // НЕ диспозим Snapshot — он может быть в CameraSnapshotCache и использоваться другими экземплярами
-        // GC сам очистит bitmap когда он больше нигде не используется
         Snapshot = null;
     }
 
@@ -330,11 +234,12 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
         UpdateTileHeight(IsVertical);
     }
 
-    /// <summary>Обновить высоту плитки с учетом вертикальности и масштаба.</summary>
+    /// <summary>Обновить размер плитки с учетом вертикальности и масштаба.</summary>
     private void UpdateTileHeight(bool isVertical)
     {
+        var baseWidth = 240 * _tileScale;
         var baseHeight = 160 * _tileScale;
-        // Для вертикальных: 2 плитки + margin между ними (TileMargin * 2 = 4)
+        TileWidth = baseWidth;
         TileHeight = isVertical ? (baseHeight * 2 + 4) : baseHeight;
     }
 

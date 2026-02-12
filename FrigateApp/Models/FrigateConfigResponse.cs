@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using System.Text.Json.Serialization;
+using Newtonsoft.Json;
 
 namespace FrigateApp.Models;
 
@@ -8,51 +8,64 @@ namespace FrigateApp.Models;
 /// </summary>
 public class FrigateConfigResponse
 {
-    [JsonPropertyName("cameras")]
+    [JsonProperty("cameras")]
     public Dictionary<string, CameraConfig>? Cameras { get; set; }
 
-    [JsonPropertyName("camera_groups")]
+    [JsonProperty("camera_groups")]
     public Dictionary<string, CameraGroupConfig>? CameraGroups { get; set; }
 }
 
 public class CameraConfig
 {
-    [JsonPropertyName("name")]
+    [JsonProperty("name")]
     public string? Name { get; set; }
 
-    [JsonPropertyName("enabled")]
+    [JsonProperty("friendly_name")]
+    public string? FriendlyName { get; set; }
+
+    [JsonProperty("enabled")]
     public bool? Enabled { get; set; } = true;
 
-    [JsonPropertyName("ffmpeg")]
+    [JsonProperty("ffmpeg")]
     public FfmpegConfig? Ffmpeg { get; set; }
 
-    [JsonPropertyName("rotate")]
+    [JsonProperty("rotate")]
     public float Rotate { get; set; } = 0.0f;
+
+    /// <summary>Потоки для live (как в вебе: ключи "sub"/"main" или др., значения — имена потоков go2rtc).</summary>
+    [JsonProperty("live")]
+    public CameraLiveConfig? Live { get; set; }
+}
+
+public class CameraLiveConfig
+{
+    [JsonProperty("streams")]
+    public Dictionary<string, string>? Streams { get; set; }
 }
 
 public class FfmpegConfig
 {
-    [JsonPropertyName("inputs")]
+    [JsonProperty("inputs")]
     public List<FfmpegInput>? Inputs { get; set; }
 }
 
 public class FfmpegInput
 {
-    [JsonPropertyName("path")]
+    [JsonProperty("path")]
     public string? Path { get; set; }
 
-    [JsonPropertyName("roles")]
+    [JsonProperty("roles")]
     public List<string>? Roles { get; set; }
 }
 
 public class CameraGroupConfig
 {
-    [JsonPropertyName("cameras")]
+    [JsonProperty("cameras")]
     public List<string>? Cameras { get; set; }
 
-    [JsonPropertyName("icon")]
+    [JsonProperty("icon")]
     public string? Icon { get; set; }
 
-    [JsonPropertyName("order")]
+    [JsonProperty("order")]
     public int Order { get; set; }
 }

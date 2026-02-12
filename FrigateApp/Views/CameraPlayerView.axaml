@@ -12,36 +12,15 @@
             <Grid ColumnDefinitions="Auto,*">
                 <Button Content="← Назад" Command="{Binding BackCommand}" VerticalAlignment="Center"/>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding CameraName}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     <TextBlock Text="{Binding StatusText}" Foreground="#888" VerticalAlignment="Center"/>
                     <TextBlock Text="{Binding ErrorText}" Foreground="Orange" IsVisible="{Binding HasError}" VerticalAlignment="Center"/>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!-- MJPEG: контент в панели размером "render" (как у RTSP), зум/пан от (0,0). -->
-        <Border x:Name="MjpegContainer" Grid.Row="1" Background="Black" ClipToBounds="True"
-                IsVisible="{Binding ShowMjpeg}">
-            <Canvas x:Name="MjpegCanvas">
-                <Panel x:Name="MjpegContentPanel" RenderTransformOrigin="0,0">
-                    <Panel.RenderTransform>
-                        <TransformGroup>
-                            <ScaleTransform ScaleX="{Binding ZoomLevel}" ScaleY="{Binding ZoomLevel}"/>
-                            <TranslateTransform X="{Binding PanX}" Y="{Binding PanY}"/>
-                        </TransformGroup>
-                    </Panel.RenderTransform>
-                    <Image Source="{Binding MjpegFrame}" Stretch="Fill"/>
-                </Panel>
-            </Canvas>
-        </Border>
-
-        <!-- RTSP плеер (LibVLC) — не на Linux -->
-        <controls:CameraPlayer x:Name="Player" Grid.Row="1"
-                               IsVisible="{Binding ShowLibVlcPlayer}"/>
-
-        <!-- RTSP плеер (RtspClientSharp) — только на Linux -->
-        <controls:RtspSharpPlayer x:Name="RtspSharpPlayer" Grid.Row="1"
-                                 IsVisible="{Binding ShowRtspSharpPlayer}"/>
+        <!-- Нативный плеер LibVLC, воспроизводящий локальный fMP4-файл из WebSocket потока -->
+        <controls:CameraPlayer x:Name="Player" Grid.Row="1"/>
         
         <!-- Индикатор загрузки -->
         <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center"

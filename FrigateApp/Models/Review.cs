@@ -1,88 +1,88 @@
 using System;
 using System.Collections.Generic;
-using System.Text.Json.Serialization;
+using Newtonsoft.Json;
 
 namespace FrigateApp.Models;
 
 /// <summary>Сегмент события для обзора (ответ GET /api/review).</summary>
 public class ReviewSegmentResponse
 {
-    [JsonPropertyName("id")]
+    [JsonProperty("id")]
     public string Id { get; set; } = "";
 
-    [JsonPropertyName("camera")]
+    [JsonProperty("camera")]
     public string Camera { get; set; } = "";
 
-    [JsonPropertyName("start_time")]
+    [JsonProperty("start_time")]
     public double StartTime { get; set; }
 
-    [JsonPropertyName("end_time")]
+    [JsonProperty("end_time")]
     public double EndTime { get; set; }
 
-    [JsonPropertyName("has_been_reviewed")]
+    [JsonProperty("has_been_reviewed")]
     public bool HasBeenReviewed { get; set; }
 
-    [JsonPropertyName("severity")]
+    [JsonProperty("severity")]
     public string Severity { get; set; } = "";
 
-    [JsonPropertyName("thumb_path")]
+    [JsonProperty("thumb_path")]
     public string? ThumbPath { get; set; }
 
-    [JsonPropertyName("data")]
+    [JsonProperty("data")]
     public ReviewSegmentData? Data { get; set; }
 }
 
 public class ReviewSegmentData
 {
-    [JsonPropertyName("objects")]
+    [JsonProperty("objects")]
     public List<string>? Objects { get; set; }
 
-    [JsonPropertyName("audio")]
+    [JsonProperty("audio")]
     public List<string>? Audio { get; set; }
 
-    [JsonPropertyName("zones")]
+    [JsonProperty("zones")]
     public List<string>? Zones { get; set; }
 }
 
 /// <summary>Сводка за последние 24 часа (GET /api/review/summary).</summary>
 public class ReviewSummaryResponse
 {
-    [JsonPropertyName("last24Hours")]
+    [JsonProperty("last24Hours")]
     public Last24HoursReview? Last24Hours { get; set; }
 
-    [JsonPropertyName("root")]
+    [JsonProperty("root")]
     public Dictionary<string, DayReview>? Root { get; set; }
 }
 
 public class Last24HoursReview
 {
-    [JsonPropertyName("reviewed_alert")]
+    [JsonProperty("reviewed_alert")]
     public int ReviewedAlert { get; set; }
 
-    [JsonPropertyName("reviewed_detection")]
+    [JsonProperty("reviewed_detection")]
     public int ReviewedDetection { get; set; }
 
-    [JsonPropertyName("total_alert")]
+    [JsonProperty("total_alert")]
     public int TotalAlert { get; set; }
 
-    [JsonPropertyName("total_detection")]
+    [JsonProperty("total_detection")]
     public int TotalDetection { get; set; }
 }
 
 public class DayReview
 {
-    [JsonPropertyName("day")]
+    [JsonProperty("day")]
     public string? Day { get; set; }
 
-    [JsonPropertyName("reviewed_alert")]
+    [JsonProperty("reviewed_alert")]
     public int ReviewedAlert { get; set; }
 
-    [JsonPropertyName("reviewed_detection")]
+    [JsonProperty("reviewed_detection")]
     public int ReviewedDetection { get; set; }
 
-    [JsonPropertyName("total_alert")]
+    [JsonProperty("total_alert")]
     public int TotalAlert { get; set; }
 
-    [JsonPropertyName("total_detection")]
+    [JsonProperty("total_detection")]
     public int TotalDetection { get; set; }
 }

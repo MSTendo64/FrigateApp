@@ -125,7 +125,8 @@
                                 <Button Background="Transparent" Padding="0" Command="{Binding OpenPlayerCommand}"
                                         Cursor="Hand" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
                                         BorderThickness="0" Focusable="False"
-                                        Height="{Binding TileHeight}">
+                                        MinWidth="{Binding TileWidth}" Width="{Binding TileWidth}"
+                                        MinHeight="{Binding TileHeight}" Height="{Binding TileHeight}">
                                     <Grid ClipToBounds="True" PointerWheelChanged="OnCameraTilePointerWheel">
                                         <Panel RenderTransformOrigin="0,0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
                                             <Panel.RenderTransform>
@@ -134,8 +135,7 @@
                                                     <TranslateTransform X="{Binding PanX}" Y="{Binding PanY}"/>
                                                 </TransformGroup>
                                             </Panel.RenderTransform>
-                                            <Image Source="{Binding Snapshot, Converter={x:Static localconv:NullToPlaceholderBitmapConverter.Instance}}" Stretch="UniformToFill"
-                                                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                                            <controls:CameraTileContent HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
                                         </Panel>
                                         <TextBlock Text="{Binding ErrorText}"
                                                    IsVisible="{Binding HasError}"
@@ -145,7 +145,7 @@
                                                 <media:DropShadowEffect Color="Black" BlurRadius="2" OffsetX="0" OffsetY="0" Opacity="1"/>
                                             </TextBlock.Effect>
                                         </TextBlock>
-                                        <TextBlock Text="{Binding Name}" FontSize="10" Foreground="White"
+                                        <TextBlock Text="{Binding DisplayName}" FontSize="10" Foreground="White"
                                                    VerticalAlignment="Top" HorizontalAlignment="Right"
                                                    Margin="0,4,6,0">
                                             <TextBlock.Effect>

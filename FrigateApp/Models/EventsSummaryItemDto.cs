@@ -1,22 +1,22 @@
-using System.Text.Json.Serialization;
+using Newtonsoft.Json;
 
 namespace FrigateApp.Models;
 
 /// <summary>Элемент сводки GET /api/events/summary.</summary>
 public class EventsSummaryItemDto
 {
-    [JsonPropertyName("camera")]
+    [JsonProperty("camera")]
     public string Camera { get; set; } = "";
 
-    [JsonPropertyName("label")]
+    [JsonProperty("label")]
     public string Label { get; set; } = "";
 
-    [JsonPropertyName("sub_label")]
+    [JsonProperty("sub_label")]
     public string? SubLabel { get; set; }
 
-    [JsonPropertyName("day")]
+    [JsonProperty("day")]
     public string Day { get; set; } = "";
 
-    [JsonPropertyName("count")]
+    [JsonProperty("count")]
     public int Count { get; set; }
 }

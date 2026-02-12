@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -39,6 +40,16 @@ public class CameraPlayer : Control
 
     // Поворот камеры
     private float _rotation = 0f;
+
+    /// <summary>Растянуть видео на всю ячейку (UniformToFill), иначе вписать с сохранением пропорций (Uniform). Для плиток — true.</summary>
+    public static readonly StyledProperty<bool> StretchToFillProperty =
+        AvaloniaProperty.Register<CameraPlayer, bool>(nameof(StretchToFill), false);
+
+    public bool StretchToFill
+    {
+        get => GetValue(StretchToFillProperty);
+        set => SetValue(StretchToFillProperty, value);
+    }
 
     /// <summary>Событие: получен первый кадр от RTSP потока.</summary>
     public event Action? FirstFrameReceived;
@@ -101,13 +112,27 @@ public class CameraPlayer : Control
                 }
             };
             
-            // Настройка медиа с опциями
-            var media = new Media(_libVlc, rtspUrl, FromType.FromLocation);
-            if (rtspUrl.TrimStart().StartsWith("rtsp:", StringComparison.OrdinalIgnoreCase))
-                media.AddOption(":rtsp-tcp");
+            // Локальный файл (растущий fMP4 от wss) — FromPath и опции для live
+            Media media;
+            var path = rtspUrl?.Trim() ?? "";
+            bool isLocalFile = path.Length > 0 && (Path.IsPathRooted(path) || path.StartsWith("file:", StringComparison.OrdinalIgnoreCase));
+            if (isLocalFile)
+            {
+                var filePath = path.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+                    ? new Uri(path).LocalPath
+                    : path;
+                media = new Media(_libVlc, filePath, FromType.FromPath);
+                media.AddOption(":live-caching=300");
+            }
+            else
+            {
+                media = new Media(_libVlc, rtspUrl, FromType.FromLocation);
+                if (path.StartsWith("rtsp:", StringComparison.OrdinalIgnoreCase))
+                    media.AddOption(":rtsp-tcp");
+            }
             _mediaPlayer.Play(media);
 
-            System.Diagnostics.Debug.WriteLine($"Playback started for: {rtspUrl}");
+            System.Diagnostics.Debug.WriteLine($"Playback started for: {path}");
 
             media.Dispose();
         }
@@ -403,19 +428,18 @@ public class CameraPlayer : Control
                     return;
                 }
 
-                // Получаем Skia canvas через custom draw operation
-                // Используем РЕАЛЬНЫЙ размер видео для правильного aspect ratio
                 var drawOp = new VideoDrawOperation(
                     new Rect(Bounds.Size),
                     _frameBuffer,
-                    _videoWidth,      // Размер буфера
+                    _videoWidth,
                     _videoHeight,
-                    _realVideoWidth,  // Реальный размер из потока (для aspect ratio)
+                    _realVideoWidth,
                     _realVideoHeight,
                     _zoomLevel,
                     _panX,
                     _panY,
-                    _rotation);       // Поворот камеры
+                    _rotation,
+                    StretchToFill);
                 
                 context.Custom(drawOp);
             }
@@ -588,22 +612,23 @@ public class CameraPlayer : Control
         _libVlc = null;
     }
 
-    // Custom draw operation для Skia
     private class VideoDrawOperation : ICustomDrawOperation
     {
         private readonly Rect _bounds;
         private readonly byte[] _frameBuffer;
-        private readonly int _videoWidth;      // Размер буфера
+        private readonly int _videoWidth;
         private readonly int _videoHeight;
-        private readonly int _realVideoWidth;  // Реальный размер для aspect ratio
+        private readonly int _realVideoWidth;
         private readonly int _realVideoHeight;
         private readonly double _zoomLevel;
         private readonly double _panX;
         private readonly double _panY;
-        private readonly float _rotation;      // Поворот в градусах
+        private readonly float _rotation;
+        private readonly bool _stretchToFill;
 
         public VideoDrawOperation(Rect bounds, byte[] frameBuffer, int videoWidth, int videoHeight,
-            int realVideoWidth, int realVideoHeight, double zoomLevel, double panX, double panY, float rotation)
+            int realVideoWidth, int realVideoHeight, double zoomLevel, double panX, double panY, float rotation,
+            bool stretchToFill = false)
         {
             _bounds = bounds;
             _frameBuffer = frameBuffer;
@@ -615,6 +640,7 @@ public class CameraPlayer : Control
             _panX = panX;
             _panY = panY;
             _rotation = rotation;
+            _stretchToFill = stretchToFill;
         }
 
         public void Dispose() { }
@@ -634,8 +660,8 @@ public class CameraPlayer : Control
             var canvas = lease.SkCanvas;
 
             canvas.Save();
-
-            // Черный фон
+            if (_stretchToFill)
+                canvas.ClipRect(new SKRect(0, 0, (float)_bounds.Width, (float)_bounds.Height));
             canvas.Clear(SKColors.Black);
 
             try
@@ -662,24 +688,44 @@ public class CameraPlayer : Control
                             var effectiveWidth = isRotated90or270 ? _realVideoHeight : _realVideoWidth;
                             var effectiveHeight = isRotated90or270 ? _realVideoWidth : _realVideoHeight;
                             
-                            // Вычисляем размер и позицию для Stretch="Uniform" с учетом эффективных размеров
+                            // Uniform = вписать в ячейку (letterbox); UniformToFill = заполнить ячейку (обрезка)
                             var viewAspect = viewW / viewH;
                             var imgAspect = (float)effectiveWidth / effectiveHeight;
 
                             float renderW, renderH, offsetX, offsetY;
-                            if (viewAspect > imgAspect)
+                            if (_stretchToFill)
                             {
-                                renderH = viewH;
-                                renderW = viewH * imgAspect;
-                                offsetX = (viewW - renderW) / 2;
-                                offsetY = 0;
+                                if (viewAspect > imgAspect)
+                                {
+                                    renderW = viewW;
+                                    renderH = viewW / imgAspect;
+                                    offsetX = 0;
+                                    offsetY = (viewH - renderH) / 2;
+                                }
+                                else
+                                {
+                                    renderH = viewH;
+                                    renderW = viewH * imgAspect;
+                                    offsetX = (viewW - renderW) / 2;
+                                    offsetY = 0;
+                                }
                             }
                             else
                             {
-                                renderW = viewW;
-                                renderH = viewW / imgAspect;
-                                offsetX = 0;
-                                offsetY = (viewH - renderH) / 2;
+                                if (viewAspect > imgAspect)
+                                {
+                                    renderH = viewH;
+                                    renderW = viewH * imgAspect;
+                                    offsetX = (viewW - renderW) / 2;
+                                    offsetY = 0;
+                                }
+                                else
+                                {
+                                    renderW = viewW;
+                                    renderH = viewW / imgAspect;
+                                    offsetX = 0;
+                                    offsetY = (viewH - renderH) / 2;
+                                }
                             }
 
                             // Применяем offset (центрирование)

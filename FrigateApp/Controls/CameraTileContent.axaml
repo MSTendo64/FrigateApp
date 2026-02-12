@@ -1,0 +1,17 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:FrigateApp.ViewModels"
+             xmlns:controls="using:FrigateApp.Controls"
+             xmlns:localconv="using:FrigateApp.Converters"
+             x:Class="FrigateApp.Controls.CameraTileContent"
+             x:DataType="vm:CameraItemViewModel"
+             x:CompileBindings="True">
+    <Grid ClipToBounds="True">
+        <!-- Плейсхолдер / кэш: пока нет wss или пока подключаемся -->
+        <Image x:Name="PlaceholderImage"
+                Source="{Binding Snapshot, Converter={x:Static localconv:NullToPlaceholderBitmapConverter.Instance}}"
+                Stretch="UniformToFill"/>
+        <!-- Видео из wss sub-потока: растягиваем на ячейку (sub даёт небольшое разрешение) -->
+        <controls:CameraPlayer x:Name="TilePlayer" IsVisible="False" StretchToFill="True"/>
+    </Grid>
+</UserControl>

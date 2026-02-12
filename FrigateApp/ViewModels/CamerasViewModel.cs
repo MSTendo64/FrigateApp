@@ -263,7 +263,9 @@ public partial class CamerasViewModel : ViewModelBase
         foreach (var name in names)
         {
             var initialZoom = zooms.TryGetValue(name, out var z) ? z : null;
-            var rotation = _cameraConfigs.TryGetValue(name, out var camConfig) ? camConfig.Rotate : 0f;
+            var camConfig = _cameraConfigs.TryGetValue(name, out var c) ? c : null;
+            var rotation = camConfig?.Rotate ?? 0f;
+            var subStreamName = FrigateApiService.GetStreamNameForLive(camConfig, name, useSubStream: true);
             var item = new CameraItemViewModel(
                 name,
                 _api,
@@ -273,7 +275,9 @@ public partial class CamerasViewModel : ViewModelBase
                 isZoomEnabled,
                 _snapshotCache,
                 rotation,
-                TileScale);
+                TileScale,
+                friendlyName: camConfig?.FriendlyName,
+                subStreamName: subStreamName);
             Cameras.Add(item);
             item.StartRefresh();
         }

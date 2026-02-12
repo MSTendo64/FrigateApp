@@ -1,50 +1,50 @@
 using System.Collections.Generic;
-using System.Text.Json.Serialization;
+using Newtonsoft.Json;
 
 namespace FrigateApp.Models;
 
 /// <summary>Событие из GET /api/events.</summary>
 public class EventDto
 {
-    [JsonPropertyName("id")]
+    [JsonProperty("id")]
     public string Id { get; set; } = "";
 
-    [JsonPropertyName("camera")]
+    [JsonProperty("camera")]
     public string Camera { get; set; } = "";
 
-    [JsonPropertyName("label")]
+    [JsonProperty("label")]
     public string Label { get; set; } = "";
 
-    [JsonPropertyName("sub_label")]
+    [JsonProperty("sub_label")]
     public string? SubLabel { get; set; }
 
-    [JsonPropertyName("start_time")]
+    [JsonProperty("start_time")]
     public double StartTime { get; set; }
 
-    [JsonPropertyName("end_time")]
+    [JsonProperty("end_time")]
     public double? EndTime { get; set; }
 
-    [JsonPropertyName("has_clip")]
+    [JsonProperty("has_clip")]
     public bool HasClip { get; set; }
 
-    [JsonPropertyName("has_snapshot")]
+    [JsonProperty("has_snapshot")]
     public bool HasSnapshot { get; set; }
 
-    [JsonPropertyName("zones")]
+    [JsonProperty("zones")]
     public List<string>? Zones { get; set; }
 
-    [JsonPropertyName("retain_indefinitely")]
+    [JsonProperty("retain_indefinitely")]
     public bool RetainIndefinitely { get; set; }
 
-    [JsonPropertyName("data")]
+    [JsonProperty("data")]
     public EventDataDto? Data { get; set; }
 }
 
 public class EventDataDto
 {
-    [JsonPropertyName("score")]
+    [JsonProperty("score")]
     public double? Score { get; set; }
 
-    [JsonPropertyName("top_score")]
+    [JsonProperty("top_score")]
     public double? TopScore { get; set; }
 }
