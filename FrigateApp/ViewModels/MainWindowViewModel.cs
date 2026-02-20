@@ -11,12 +11,12 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private FrigateApiService? _camerasApi;
     /// <summary>Ссылка на экран камер — при возврате из проигрывателя восстанавливаем выбранную группу.</summary>
-    private CamerasViewModel? _camerasViewModel;
+    private OptimizedCamerasViewModel? _camerasViewModel;
     private EventsViewModel? _eventsViewModel;
     private ViewModelBase? _viewModelBeforeClip;
     private readonly UserPreferencesService _prefs = new();
     /// <summary>Кэш превью камер — сохраняет картинку при переходах между группами.</summary>
-    private readonly CameraSnapshotCache _snapshotCache = new();
+    private readonly CameraSnapshotCache _snapshotCache = new(maxCacheSize: 60);
 
     public MainWindowViewModel()
     {
@@ -26,7 +26,7 @@ public partial class MainWindowViewModel : ViewModelBase
     internal void NavigateToCameras(FrigateApiService api)
     {
         _camerasApi = api;
-        _camerasViewModel = new CamerasViewModel(api, NavigateToLogin, NavigateToPlayer, NavigateToSettings, NavigateToEvents, NavigateToRecordings, _prefs, _snapshotCache);
+        _camerasViewModel = new OptimizedCamerasViewModel(api, NavigateToLogin, NavigateToPlayer, NavigateToSettings, NavigateToEvents, NavigateToRecordings, _prefs, _snapshotCache);
         CurrentViewModel = _camerasViewModel;
         _ = _camerasViewModel.LoadCamerasCommand.ExecuteAsync(null);
     }
@@ -38,9 +38,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     internal void NavigateToPlayer(string cameraName, FrigateApiService api)
     {
-        var vm = new CameraPlayerViewModel(cameraName, api, NavigateBackToCameras);
+        var vm = new LowLatencyCameraPlayerViewModel(cameraName, api, NavigateBackToCameras);
         CurrentViewModel = vm;
-        _ = vm.StartAsync(); // Загрузить RTSP URL и начать воспроизведение
+        _ = vm.StartAsync();
     }
 
     internal void NavigateToEvents()

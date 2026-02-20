@@ -72,7 +72,7 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
 
     private readonly FrigateApiService _api;
     private readonly CameraSnapshotCache? _snapshotCache;
-    private WssFmp4StreamService? _wssStream;
+    private WssStreamHandle? _wssHandle;
     private CancellationTokenSource? _cts;
     private bool _disposed;
     private bool _isVisible = true;
@@ -80,6 +80,7 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
     private readonly Action? _onOpenPlayer;
     private readonly Action<CameraItemViewModel>? _onZoomChanged;
     private readonly string _subStreamName;
+    private readonly WssStreamPoolManager? _wssPool;
 
     public CameraItemViewModel(
         string cameraName,
@@ -92,7 +93,8 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
         float rotation = 0f,
         double tileScale = 1.0,
         string? friendlyName = null,
-        string? subStreamName = null)
+        string? subStreamName = null,
+        WssStreamPoolManager? wssPool = null)
     {
         Name = cameraName;
         _subStreamName = !string.IsNullOrWhiteSpace(subStreamName) ? subStreamName : $"{cameraName}_sub";
@@ -104,6 +106,7 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
         IsZoomEnabled = isZoomEnabled;
         Rotation = rotation;
         _tileScale = tileScale;
+        _wssPool = wssPool;
         
         // Загрузить закэшированное превью (если есть) — мгновенное отображение при переходах
         if (_snapshotCache != null)
@@ -165,17 +168,55 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
         System.Diagnostics.Debug.WriteLine($"[{Name}] Visibility changed: {isVisible}");
     }
 
-    public void StartRefresh()
+    public async void StartRefresh()
     {
         if (_disposed) return;
         StopRefresh();
-        _wssStream = new WssFmp4StreamService(_api);
-        _wssStream.FileReady += OnWssFileReady;
-        _wssStream.ErrorOccurred += OnWssError;
+
         VideoFilePath = null;
-        _ = _wssStream.StartAsync(_subStreamName);
         StatsText = "WSS • подключение…";
+
+        if (_wssPool != null)
+        {
+            // Используем пул потоков с ограничением количества одновременных подключений
+            _wssHandle = await _wssPool.AcquireStreamAsync(
+                Name,
+                _subStreamName,
+                _api,
+                OnWssFileReady,
+                OnWssError).ConfigureAwait(false);
+
+            if (_wssHandle == null)
+            {
+                // Не удалось получить поток (например, отмена)
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (!_disposed)
+                    {
+                        HasError = true;
+                        ErrorText = "Не удалось получить поток";
+                        StatsText = "WSS • ошибка";
+                    }
+                });
+            }
+            else
+            {
+                _wssHandle.Stream.FileReady += OnWssFileReadyDirect;
+                _wssHandle.Stream.ErrorOccurred += OnWssErrorDirect;
+            }
+        }
+        else
+        {
+            // Старое поведение без пула (для совместимости)
+            var wssStream = new WssFmp4StreamService(_api);
+            wssStream.FileReady += OnWssFileReady;
+            wssStream.ErrorOccurred += OnWssError;
+            _ = wssStream.StartAsync(_subStreamName);
+        }
     }
+
+    private void OnWssFileReadyDirect(string filePath) => OnWssFileReady(filePath);
+    private void OnWssErrorDirect(string? message) => OnWssError(message);
 
     private void OnWssFileReady(string filePath)
     {
@@ -208,14 +249,15 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;
-        if (_wssStream != null)
+
+        if (_wssHandle != null)
         {
-            _wssStream.FileReady -= OnWssFileReady;
-            _wssStream.ErrorOccurred -= OnWssError;
-            _wssStream.Stop();
-            _wssStream.Dispose();
-            _wssStream = null;
+            _wssHandle.Stream.FileReady -= OnWssFileReadyDirect;
+            _wssHandle.Stream.ErrorOccurred -= OnWssErrorDirect;
+            _wssHandle.Dispose();
+            _wssHandle = null;
         }
+
         VideoFilePath = null;
     }
 

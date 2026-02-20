@@ -252,4 +252,31 @@ public class UserPreferencesService
         }
     }
 
+    /// <summary>Получить FPS для профиля (по умолчанию 1).</summary>
+    public int GetFps(string profileKey, int defaultFps = 1)
+    {
+        LoadTileScaleIfNeeded();
+        // Используем тот же файл для простоты
+        var key = profileKey + "|fps";
+        if (_tileScaleByProfile.TryGetValue(key, out var scale))
+            return (int)scale;
+        return defaultFps;
+    }
+
+    /// <summary>Сохранить FPS для профиля.</summary>
+    public void SaveFps(string profileKey, int fps)
+    {
+        LoadTileScaleIfNeeded();
+        var key = profileKey + "|fps";
+        _tileScaleByProfile[key] = fps;
+        try
+        {
+            var json = JsonConvert.SerializeObject(_tileScaleByProfile, JsonSettings);
+            File.WriteAllText(_tileScalePath, json);
+        }
+        catch
+        {
+            // игнорируем ошибки записи
+        }
+    }
 }

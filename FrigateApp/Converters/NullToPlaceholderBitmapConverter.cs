@@ -6,8 +6,8 @@ using Avalonia.Media.Imaging;
 namespace FrigateApp.Converters;
 
 /// <summary>
-/// Возвращает placeholder-битмап при null, иначе исходный Bitmap.
-/// Предотвращает NullReferenceException в Image.MeasureOverride на Linux при Source=null.
+/// Возвращает placeholder-битмап при null или утилизированном Bitmap.
+/// Предотвращает NullReferenceException в Image.MeasureOverride.
 /// </summary>
 public sealed class NullToPlaceholderBitmapConverter : IValueConverter
 {
@@ -39,7 +39,20 @@ public sealed class NullToPlaceholderBitmapConverter : IValueConverter
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         if (value is Bitmap bmp)
-            return bmp;
+        {
+            // Пытаемся получить размер — если Bitmap утилизирован, будет исключение
+            try
+            {
+                var _ = bmp.PixelSize;
+                var __ = bmp.Size;  // Дополнительная проверка
+                return bmp;
+            }
+            catch
+            {
+                // Bitmap утилизирован — возвращаем placeholder
+                return PlaceholderBitmap;
+            }
+        }
         return PlaceholderBitmap;
     }
 

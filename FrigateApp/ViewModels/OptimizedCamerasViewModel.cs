@@ -10,13 +10,17 @@ using FrigateApp.Services;
 
 namespace FrigateApp.ViewModels;
 
-public partial class CamerasViewModel : ViewModelBase
+/// <summary>
+/// Оптимизированная ViewModel для сетки камер с поддержкой 30+ камер.
+/// Использует легковесные snapshot-обновления вместо видеопотоков.
+/// </summary>
+public partial class OptimizedCamerasViewModel : ViewModelBase
 {
     [ObservableProperty]
     private ObservableCollection<SidebarItemViewModel> _sidebarItems = new();
 
     [ObservableProperty]
-    private ObservableCollection<CameraItemViewModel> _cameras = new();
+    private ObservableCollection<LightCameraItemViewModel> _cameras = new();
 
     [ObservableProperty]
     private string _title = "Камеры";
@@ -30,38 +34,49 @@ public partial class CamerasViewModel : ViewModelBase
     [ObservableProperty]
     private string _loadError = "";
 
-    /// <summary>Выбрана группа камер (не «Все камеры») — показываем кнопку сброса зумов.</summary>
     [ObservableProperty]
     private bool _isGroupSelected;
 
-    /// <summary>Масштаб размера плиток камер (0.5-2.0, по умолчанию 1.0).</summary>
     [ObservableProperty]
     private double _tileScale = 1.0;
 
-    /// <summary>Боковая панель с группами камер видима.</summary>
+    [ObservableProperty]
+    private double _tileWidth = 240;
+
+    [ObservableProperty]
+    private double _tileHeight = 160;
+
     [ObservableProperty]
     private bool _isSidebarVisible = true;
 
-    /// <summary>Использование CPU в процентах.</summary>
     [ObservableProperty]
     private double _cpuUsage;
 
-    /// <summary>Использование RAM в процентах.</summary>
     [ObservableProperty]
     private double _ramUsage;
 
-    /// <summary>Использование GPU в процентах.</summary>
     [ObservableProperty]
     private double _gpuUsage;
 
-    /// <summary>Показывать под каждой камерой статистику (поток, задержка, трафик).</summary>
     [ObservableProperty]
     private bool _isStatsVisible;
+
+    [ObservableProperty]
+    private int _fps = 1;
 
     [RelayCommand]
     private void ToggleStats()
     {
         IsStatsVisible = !IsStatsVisible;
+    }
+
+    [RelayCommand]
+    private void SetFps(int value)
+    {
+        if (value < 1) value = 1;
+        if (value > 5) value = 5;
+        Fps = value;
+        _ = RefreshFpsAsync();
     }
 
     private readonly FrigateApiService _api;
@@ -71,16 +86,15 @@ public partial class CamerasViewModel : ViewModelBase
     private readonly Action? _onOpenEvents;
     private readonly Action? _onOpenRecordings;
     private readonly UserPreferencesService _prefs;
-    private readonly CameraSnapshotCache? _snapshotCache;
+    private readonly CameraSnapshotCache _snapshotCache;
     private readonly SystemMonitorService _systemMonitor;
-    private readonly WssStreamPoolManager _wssPool;
 
     private List<string> _allCameraNames = new();
     private Dictionary<string, CameraGroupConfig> _cameraGroups = new();
     private Dictionary<string, CameraConfig> _cameraConfigs = new();
     private string? _selectedGroupId;
 
-    public CamerasViewModel(
+    public OptimizedCamerasViewModel(
         FrigateApiService api,
         Action onLogout,
         Action<string, FrigateApiService>? onOpenPlayer,
@@ -97,22 +111,17 @@ public partial class CamerasViewModel : ViewModelBase
         _onOpenEvents = onOpenEvents;
         _onOpenRecordings = onOpenRecordings;
         _prefs = prefs ?? new UserPreferencesService();
-        _snapshotCache = snapshotCache;
+        _snapshotCache = snapshotCache ?? new CameraSnapshotCache(maxCacheSize: 60);
 
         _systemMonitor = new SystemMonitorService();
         _systemMonitor.MetricsUpdated += OnSystemMetricsUpdated;
-        _systemMonitor.Start(TimeSpan.FromSeconds(2)); // Обновление каждые 2 секунды
-
-        // Пул WSS потоков: максимум 4 одновременных потока для снижения нагрузки на CPU
-        _wssPool = new WssStreamPoolManager(maxConcurrentStreams: 4);
+        _systemMonitor.Start(TimeSpan.FromSeconds(2));
     }
 
     private void OnSystemMetricsUpdated(double cpu, double ram, double gpu)
     {
-        // Обновляем на UI потоке
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            System.Diagnostics.Debug.WriteLine($"CamerasVM: Updating metrics - CPU={cpu:F1}%, RAM={ram:F1}%, GPU={gpu:F1}%");
             CpuUsage = cpu;
             RamUsage = ram;
             GpuUsage = gpu;
@@ -143,36 +152,27 @@ public partial class CamerasViewModel : ViewModelBase
         _onOpenRecordings?.Invoke();
     }
 
-    private void SaveCameraZoom(CameraItemViewModel vm)
+    private async Task RefreshFpsAsync()
     {
-        if (string.IsNullOrEmpty(_selectedGroupId)) return;
-        var profileKey = UserPreferencesService.GetProfileKey(_api.BaseUrl, UserName);
-        _prefs.SaveCameraZoom(profileKey, _selectedGroupId, vm.Name, new CameraZoomState
+        // Перезапустить все камеры с новым интервалом
+        foreach (var cam in Cameras)
         {
-            ZoomLevel = vm.ZoomLevel,
-            PanX = vm.PanX,
-            PanY = vm.PanY
-        });
-    }
-
-    [RelayCommand]
-    private void ResetAllZooms()
-    {
-        if (string.IsNullOrEmpty(_selectedGroupId)) return;
-        foreach (var c in Cameras)
-        {
-            c.ZoomLevel = 1;
-            c.PanX = 0;
-            c.PanY = 0;
-            SaveCameraZoom(c);
+            cam.StopRefresh();
         }
+
+        var interval = 1000 / Fps;
+        foreach (var cam in Cameras)
+        {
+            cam.StartRefresh();
+        }
+
+        await Task.CompletedTask;
     }
 
     [RelayCommand]
     private void Logout()
     {
         _systemMonitor?.Stop();
-        _wssPool.StopAll();
         foreach (var c in Cameras)
             c.Dispose();
         Cameras.Clear();
@@ -182,7 +182,6 @@ public partial class CamerasViewModel : ViewModelBase
     public void Cleanup()
     {
         _systemMonitor?.Dispose();
-        _wssPool.Dispose();
         foreach (var c in Cameras)
             c.Dispose();
         Cameras.Clear();
@@ -198,9 +197,9 @@ public partial class CamerasViewModel : ViewModelBase
             var profile = await _api.GetProfileAsync().ConfigureAwait(true);
             UserName = profile.Username ?? "";
 
-            // Загрузить сохраненный масштаб плиток
             var profileKey = UserPreferencesService.GetProfileKey(_api.BaseUrl, UserName);
             TileScale = _prefs.GetTileScale(profileKey);
+            Fps = _prefs.GetFps(profileKey, 1);
 
             var config = await _api.GetConfigAsync().ConfigureAwait(true);
             _allCameraNames = (await _api.GetCameraNamesAsync().ConfigureAwait(true)).ToList();
@@ -208,7 +207,7 @@ public partial class CamerasViewModel : ViewModelBase
             _cameraGroups = config.CameraGroups ?? new Dictionary<string, CameraGroupConfig>();
             _cameraConfigs = config.Cameras ?? new Dictionary<string, CameraConfig>();
 
-            // Боковая панель: "Все камеры" + группы (сортировка по order, затем по ключу)
+            // Боковая панель
             var sidebar = new List<SidebarItemViewModel>();
             var allItem = new SidebarItemViewModel { Id = null, DisplayName = "Все камеры", IsSelected = true };
             allItem.SelectCommand = new AsyncRelayCommand(async () => await SelectSidebarAsync(null).ConfigureAwait(true));
@@ -263,28 +262,31 @@ public partial class CamerasViewModel : ViewModelBase
         Cameras.Clear();
 
         var profileKey = UserPreferencesService.GetProfileKey(_api.BaseUrl, UserName);
-        var zooms = _prefs.GetCameraZooms(profileKey, groupId);
-        var isZoomEnabled = !string.IsNullOrEmpty(groupId);
+        var interval = 1000 / Fps;
+
+        // Обновляем размеры плиток
+        TileWidth = 240 * TileScale;
+        TileHeight = 160 * TileScale;
+
+        // Зум работает только в группах (не в "Все камеры")
+        var isGroupSelected = !string.IsNullOrEmpty(_selectedGroupId);
 
         foreach (var name in names)
         {
-            var initialZoom = zooms.TryGetValue(name, out var z) ? z : null;
             var camConfig = _cameraConfigs.TryGetValue(name, out var c) ? c : null;
             var rotation = camConfig?.Rotate ?? 0f;
-            var subStreamName = FrigateApiService.GetStreamNameForLive(camConfig, name, useSubStream: true);
-            var item = new CameraItemViewModel(
+            var item = new LightCameraItemViewModel(
                 name,
                 _api,
                 () => _onOpenPlayer?.Invoke(name, _api),
-                initialZoom,
-                SaveCameraZoom,
-                isZoomEnabled,
+                null, // onZoomChanged - не используется в сетке
                 _snapshotCache,
                 rotation,
                 TileScale,
-                friendlyName: camConfig?.FriendlyName,
-                subStreamName: subStreamName,
-                wssPool: _wssPool);
+                camConfig?.FriendlyName,
+                updateIntervalMs: interval,
+                snapshotHeight: 180,
+                isZoomEnabled: isGroupSelected);
             Cameras.Add(item);
             item.StartRefresh();
         }
@@ -294,14 +296,21 @@ public partial class CamerasViewModel : ViewModelBase
 
     partial void OnTileScaleChanged(double value)
     {
-        // Сохранить новый масштаб
         var profileKey = UserPreferencesService.GetProfileKey(_api.BaseUrl, UserName);
         _prefs.SaveTileScale(profileKey, value);
 
-        // Обновить все существующие камеры
+        TileWidth = 240 * value;
+        TileHeight = 160 * value;
+
         foreach (var camera in Cameras)
         {
             camera.UpdateTileScale(value);
         }
+    }
+
+    partial void OnFpsChanged(int value)
+    {
+        var profileKey = UserPreferencesService.GetProfileKey(_api.BaseUrl, UserName);
+        _prefs.SaveFps(profileKey, value);
     }
 }

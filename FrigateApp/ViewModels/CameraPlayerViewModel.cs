@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -28,6 +29,10 @@ public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
     [ObservableProperty]
     private string? _videoFilePath;
 
+    /// <summary>Снапшот для отображения пока не появилось видео.</summary>
+    [ObservableProperty]
+    private Bitmap? _snapshot;
+
     [ObservableProperty]
     private string _statusText = "Загрузка...";
 
@@ -54,10 +59,12 @@ public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
     private double _panY;
 
     private readonly FrigateApiService _api;
-    private readonly Action _onBack;
+    private Action? _onBack;
     private WssFmp4StreamService? _wssStream;
     private bool _disposed;
     private bool _triedSubFallback;
+    private CancellationTokenSource? _snapshotCts;
+    private readonly int _snapshotHeight = 720;
 
     public CameraPlayerViewModel(string cameraName, FrigateApiService api, Action onBack)
     {
@@ -96,6 +103,10 @@ public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
 
             var mainStreamName = FrigateApiService.GetStreamNameForLive(camConfig, CameraName, useSubStream: false);
             System.Diagnostics.Debug.WriteLine("Starting WebSocket fMP4 stream...");
+            
+            // Запускаем обновление снапшотов (15 FPS = 66ms) пока не появится видео
+            StartSnapshotRefresh(66);
+            
             StartWssStream(mainStreamName);
             StatusText = "Ожидание потока...";
             IsLoading = false;
@@ -120,18 +131,169 @@ public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
         _wssStream.ErrorOccurred += OnWssError;
         _ = _wssStream.StartAsync(streamName);
         System.Diagnostics.Debug.WriteLine($"WebSocket fMP4 stream started: {streamName}");
+        
+        // Таймаут ожидания потока
+        _ = Task.Delay(TimeSpan.FromSeconds(10)).ContinueWith(t =>
+        {
+            if (_disposed) return;
+            if (string.IsNullOrEmpty(VideoFilePath))
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (!_disposed && string.IsNullOrEmpty(VideoFilePath))
+                    {
+                        StatusText = "Таймаут подключения...";
+                        HasError = true;
+                        ErrorText = "Не удалось получить поток за 10 сек";
+                    }
+                });
+            }
+        });
+    }
+
+    /// <summary>Запустить обновление снапшотов с заданным интервалом.</summary>
+    private void StartSnapshotRefresh(int intervalMs)
+    {
+        _snapshotCts?.Cancel();
+        _snapshotCts?.Dispose();
+        _snapshotCts = new CancellationTokenSource();
+        _ = RefreshSnapshotsAsync(_snapshotCts.Token, intervalMs);
+    }
+
+    private async Task RefreshSnapshotsAsync(CancellationToken ct, int intervalMs)
+    {
+        var consecutiveErrors = 0;
+        var maxErrors = 10;
+
+        while (!ct.IsCancellationRequested && !_disposed && _snapshotCts != null && !_snapshotCts.IsCancellationRequested)
+        {
+            try
+            {
+                // Если видео уже появилось — останавливаем снапшоты
+                if (!string.IsNullOrEmpty(VideoFilePath))
+                {
+                    System.Diagnostics.Debug.WriteLine("Video appeared, stopping snapshots");
+                    break;
+                }
+
+                var bytes = await _api.GetLatestFrameBytesAsync(CameraName, _snapshotHeight, ct).ConfigureAwait(false);
+                if (bytes != null && bytes.Length > 0)
+                {
+                    consecutiveErrors = 0;
+                    await UpdateSnapshotAsync(bytes).ConfigureAwait(false);
+                }
+                else
+                {
+                    consecutiveErrors++;
+                }
+
+                if (consecutiveErrors >= maxErrors)
+                {
+                    System.Diagnostics.Debug.WriteLine("Too many snapshot errors, stopping");
+                    break;
+                }
+
+                await Task.Delay(intervalMs, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                consecutiveErrors++;
+                System.Diagnostics.Debug.WriteLine($"Snapshot error: {ex.Message}");
+                if (consecutiveErrors >= maxErrors)
+                    break;
+                try { await Task.Delay(intervalMs * 2, ct).ConfigureAwait(false); }
+                catch { break; }
+            }
+        }
+    }
+
+    private async Task UpdateSnapshotAsync(byte[] bytes)
+    {
+        if (_disposed || _snapshotCts == null || _snapshotCts.IsCancellationRequested) return;
+
+        Bitmap? newBitmap = null;
+        try
+        {
+            using var ms = new System.IO.MemoryStream(bytes);
+            newBitmap = new Bitmap(ms);
+
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (_disposed || _snapshotCts == null || _snapshotCts.IsCancellationRequested)
+                {
+                    newBitmap?.Dispose();
+                    return;
+                }
+                // Утилизируем старый снапшот
+                var oldSnapshot = Snapshot;
+                Snapshot = newBitmap;
+                if (oldSnapshot != null && oldSnapshot != newBitmap)
+                {
+                    try { oldSnapshot.Dispose(); } catch { }
+                }
+            }, Avalonia.Threading.DispatcherPriority.Background);
+        }
+        catch
+        {
+            newBitmap?.Dispose();
+            throw;
+        }
     }
 
     private void OnWssFileReady(string filePath)
     {
         if (_disposed) return;
         System.Diagnostics.Debug.WriteLine($"WebSocket live file ready: {filePath}");
+
+        // Останавливаем снапшоты — видео появилось
+        try
+        {
+            _snapshotCts?.Cancel();
+        }
+        catch { }
+
+        // Проверяем размер файла
+        var fileInfo = new System.IO.FileInfo(filePath);
+        var fileSizeKb = fileInfo.Length / 1024;
+        System.Diagnostics.Debug.WriteLine($"File size: {fileSizeKb} KB");
+
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
             if (_disposed) return;
             VideoFilePath = filePath;
             IsLoading = false;
-            StatusText = "Поток подключён";
+            StatusText = fileSizeKb > 0
+                ? $"Поток подключён ({fileSizeKb} KB)"
+                : "Поток подключён (ожидание данных...)";
+
+            // Если файл слишком маленький (< 10 KB), возможно поток ещё не начался
+            if (fileSizeKb < 10)
+            {
+                _ = Task.Delay(TimeSpan.FromSeconds(3)).ContinueWith(t =>
+                {
+                    if (_disposed || !string.IsNullOrEmpty(ErrorText)) return;
+
+                    // Проверяем размер снова
+                    var newFileInfo = new System.IO.FileInfo(filePath);
+                    var newSizeKb = newFileInfo.Length / 1024;
+                    if (newSizeKb < 10)
+                    {
+                        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                        {
+                            if (!_disposed && string.IsNullOrEmpty(ErrorText))
+                            {
+                                StatusText = "Поток есть, но нет данных";
+                                HasError = true;
+                                ErrorText = "Пустой поток — проверьте камеру";
+                            }
+                        });
+                    }
+                });
+            }
         });
     }
 
@@ -252,14 +414,47 @@ public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void Back()
     {
+        // Сначала вызываем обратный вызов, потом dispose
+        // Это предотвращает использование утилизированного ViewModel
+        var onBack = _onBack;
+        _onBack = null; // Предотвращаем повторный вызов
+        onBack?.Invoke();
+        
+        // Dispose после возврата
         Dispose();
-        _onBack();
     }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+
+        // Останавливаем снапшоты
+        _snapshotCts?.Cancel();
+        _snapshotCts?.Dispose();
+        _snapshotCts = null;
+
+        var filePath = VideoFilePath;
+        VideoFilePath = null;
+
         StopWssStream();
+
+        // Утилизируем снапшот
+        Snapshot?.Dispose();
+        Snapshot = null;
+
+        // Удаляем временный файл
+        if (!string.IsNullOrEmpty(filePath) && System.IO.File.Exists(filePath))
+        {
+            try
+            {
+                System.IO.File.Delete(filePath);
+                System.Diagnostics.Debug.WriteLine($"Deleted temp file: {filePath}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to delete temp file {filePath}: {ex.Message}");
+            }
+        }
     }
 }

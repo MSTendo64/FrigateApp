@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Threading.Tasks;
+using System.Timers;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -21,13 +23,18 @@ public class CameraPlayer : Control
     private LibVLC? _libVlc;
     private MediaPlayer? _mediaPlayer;
     private byte[]? _frameBuffer;
-    private int _videoWidth;      // Размер буфера (фиксированный 1920x1080)
+    private int _videoWidth;
     private int _videoHeight;
-    private int _realVideoWidth;  // РЕАЛЬНЫЙ размер видео из потока (для правильного aspect ratio)
+    private int _realVideoWidth;
     private int _realVideoHeight;
-    private bool _realSizeDetected; // Флаг: реальный размер уже определен
+    private bool _realSizeDetected;
     private readonly object _frameLock = new();
     private bool _hasReceivedFirstFrame;
+    
+    // Для работы с растущими файлами
+    private string? _currentFilePath;
+    private long _lastFileSize;
+    private System.Timers.Timer? _fileWatchTimer;
     
     // Зум и пан
     private double _zoomLevel = 1.0;
@@ -121,8 +128,19 @@ public class CameraPlayer : Control
                 var filePath = path.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
                     ? new Uri(path).LocalPath
                     : path;
-                media = new Media(_libVlc, filePath, FromType.FromPath);
-                media.AddOption(":live-caching=300");
+                
+                // Используем file:// URL для правильного чтения растущего файла
+                var fileUrl = $"file:///{filePath.Replace("\\", "/")}";
+                media = new Media(_libVlc, fileUrl, FromType.FromLocation);
+                
+                // Опции для live-файлов (растущий файл)
+                media.AddOption(":input-repeat=0");
+                media.AddOption(":no-video-title-show");
+                media.AddOption(":no-audio");
+                media.AddOption(":live-caching=50");
+                media.AddOption(":file-caching=50");
+                media.AddOption(":demux=mp4");
+                media.AddOption(":no-demux-file");
             }
             else
             {
@@ -146,15 +164,90 @@ public class CameraPlayer : Control
     public void PlayMediaUrl(string url, float rotation = 0f)
     {
         Play(url, rotation);
+        
+        // Запускаем мониторинг растущего файла
+        if (!string.IsNullOrEmpty(url) && (Path.IsPathRooted(url) || url.StartsWith("file:", StringComparison.OrdinalIgnoreCase)))
+        {
+            StartFileWatch(url);
+        }
+    }
+
+    /// <summary>Запустить мониторинг растущего файла и перезапуск при изменении.</summary>
+    private void StartFileWatch(string url)
+    {
+        StopFileWatch();
+        
+        var filePath = url.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+            ? new Uri(url).LocalPath
+            : url;
+        
+        _currentFilePath = filePath;
+        _lastFileSize = 0;
+        
+        _fileWatchTimer = new System.Timers.Timer(500); // Проверка каждые 500ms
+        _fileWatchTimer.Elapsed += async (s, e) => await CheckFileGrowthAsync();
+        _fileWatchTimer.Start();
+    }
+
+    private async Task CheckFileGrowthAsync()
+    {
+        if (string.IsNullOrEmpty(_currentFilePath)) return;
+        
+        try
+        {
+            var fileInfo = new FileInfo(_currentFilePath);
+            if (!fileInfo.Exists) return;
+            
+            var newSize = fileInfo.Length;
+            var hasGrown = newSize > _lastFileSize + 1024; // Вырос более чем на 1KB
+            
+            if (hasGrown && _mediaPlayer != null)
+            {
+                // Файл растёт - проверяем что видео воспроизводится
+                var isPlaying = _mediaPlayer.IsPlaying;
+                var position = _mediaPlayer.Position;
+                
+                // Если позиция не меняется или видео не играет - перезапускаем
+                if (!isPlaying || position > 0.95)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[FileWatch] Restarting playback (pos={position:F2}, playing={isPlaying})");
+                    await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        _mediaPlayer?.Stop();
+                        _mediaPlayer?.Play();
+                    }, Avalonia.Threading.DispatcherPriority.Background);
+                }
+            }
+            
+            _lastFileSize = newSize;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[FileWatch] Error: {ex.Message}");
+        }
+    }
+
+    private void StopFileWatch()
+    {
+        _fileWatchTimer?.Stop();
+        _fileWatchTimer?.Dispose();
+        _fileWatchTimer = null;
+        _currentFilePath = null;
     }
 
     /// <summary>Остановить воспроизведение.</summary>
     public void Stop()
     {
-        _mediaPlayer?.Stop();
-        _mediaPlayer?.Dispose();
-        _mediaPlayer = null;
+        StopFileWatch();
         
+        try
+        {
+            _mediaPlayer?.Stop();
+            _mediaPlayer?.Dispose();
+        }
+        catch { }
+        _mediaPlayer = null;
+
         lock (_frameLock)
         {
             _frameBuffer = null;
@@ -164,9 +257,14 @@ public class CameraPlayer : Control
             _realVideoHeight = 0;
             _realSizeDetected = false;
         }
-        
+
         _hasReceivedFirstFrame = false;
-        InvalidateVisual();
+        
+        try
+        {
+            InvalidateVisual();
+        }
+        catch { }
     }
 
     /// <summary>Приостановить воспроизведение.</summary>
@@ -402,8 +500,11 @@ public class CameraPlayer : Control
         // Запросить перерисовку на UI потоке
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            InvalidateVisual();
+            // Проверяем что не утилизированы
+            if (_mediaPlayer == null || _libVlc == null) return;
             
+            InvalidateVisual();
+
             // Уведомить о первом кадре
             if (!_hasReceivedFirstFrame)
             {
@@ -418,7 +519,7 @@ public class CameraPlayer : Control
     public override void Render(DrawingContext context)
     {
         base.Render(context);
-        
+
             lock (_frameLock)
             {
                 if (_frameBuffer == null || _videoWidth <= 0 || _videoHeight <= 0)
@@ -451,16 +552,17 @@ public class CameraPlayer : Control
         var pos = e.GetPosition(this);
         var factor = e.Delta.Y > 0 ? 1.1 : 1.0 / 1.1;
         var newZoom = Math.Clamp(_zoomLevel * factor, 1.0, 4.0);
-        
+
         if (newZoom != _zoomLevel)
         {
             // Вычисляем размер и offset изображения (как в Render)
             var viewW = Bounds.Width;
             var viewH = Bounds.Height;
-            if (viewW <= 0 || viewH <= 0 || _realVideoWidth <= 0 || _realVideoHeight <= 0)
+            if (viewW <= 0 || viewH <= 0)
             {
                 _zoomLevel = newZoom;
                 InvalidateVisual();
+                ZoomStateChanged?.Invoke(_zoomLevel, _panX, _panY);
                 e.Handled = true;
                 return;
             }
@@ -469,8 +571,8 @@ public class CameraPlayer : Control
             var normalizedAngle = _rotation % 360;
             if (normalizedAngle < 0) normalizedAngle += 360;
             var isRotated90or270 = Math.Abs(normalizedAngle - 90) < 1 || Math.Abs(normalizedAngle - 270) < 1;
-            var effectiveWidth = isRotated90or270 ? _realVideoHeight : _realVideoWidth;
-            var effectiveHeight = isRotated90or270 ? _realVideoWidth : _realVideoHeight;
+            var effectiveWidth = isRotated90or270 ? (_realVideoWidth > 0 ? _realVideoWidth : _videoWidth) : (_realVideoHeight > 0 ? _realVideoHeight : _videoHeight);
+            var effectiveHeight = isRotated90or270 ? (_realVideoHeight > 0 ? _realVideoHeight : _videoHeight) : (_realVideoWidth > 0 ? _realVideoWidth : _videoWidth);
 
             var viewAspect = viewW / viewH;
             var imgAspect = (double)effectiveWidth / effectiveHeight;
@@ -499,12 +601,12 @@ public class CameraPlayer : Control
             _panX = imgX - (imgX - _panX) * (newZoom / _zoomLevel);
             _panY = imgY - (imgY - _panY) * (newZoom / _zoomLevel);
             _zoomLevel = newZoom;
-            
+
             ClampPan();
             ZoomStateChanged?.Invoke(_zoomLevel, _panX, _panY);
             InvalidateVisual();
         }
-        
+
         e.Handled = true;
     }
 
@@ -607,8 +709,16 @@ public class CameraPlayer : Control
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnDetachedFromVisualTree(e);
-        Stop();
-        _libVlc?.Dispose();
+        
+        StopFileWatch();
+        
+        try { Stop(); } catch { }
+        
+        try
+        {
+            _libVlc?.Dispose();
+        }
+        catch { }
         _libVlc = null;
     }
 

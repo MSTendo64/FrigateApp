@@ -159,6 +159,21 @@ public class FrigateApiService
         return $"{wsBase}/live/mse/api/ws?src={Uri.EscapeDataString(streamName)}";
     }
 
+    /// <summary>
+    /// Прямой HTTP URL для fMP4 потока (через go2rtc если доступен).
+    /// Формат: http://frigate:8971/api/go2rtc/streamName.mp4
+    /// </summary>
+    public string GetDirectHttpStreamUrl(string streamName)
+    {
+        if (string.IsNullOrWhiteSpace(streamName))
+            throw new ArgumentException("Stream name is required.", nameof(streamName));
+        // Пробуем go2rtc HTTP поток (если настроен)
+        var httpBase = _baseUrl.EndsWith("/api", StringComparison.OrdinalIgnoreCase) 
+            ? _baseUrl[..^4] 
+            : _baseUrl.TrimEnd('/');
+        return $"{httpBase}/api/go2rtc/{Uri.EscapeDataString(streamName)}.mp4";
+    }
+
     /// <summary>Базовый URL для WebSocket (ws/wss + хост без /api).</summary>
     private string GetWebSocketBaseUrl()
     {

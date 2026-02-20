@@ -24,14 +24,40 @@ public partial class CamerasView : UserControl
     private void OnCameraTilePointerWheel(object? sender, PointerWheelEventArgs e)
     {
         if ((e.KeyModifiers & KeyModifiers.Shift) == 0) return;
-        if (sender is not Control control || control.DataContext is not CameraItemViewModel vm) return;
-        if (!vm.IsZoomEnabled) return;
-        var pos = e.GetPosition(control);
-        var w = control.Bounds.Width;
-        var h = control.Bounds.Height;
-        if (w <= 0 || h <= 0) return;
-        vm.ZoomAt(pos.X, pos.Y, w, h, e.Delta.Y);
-        e.Handled = true;
+        if (sender is not Control control) return;
+        
+        // Проверяем DataContext
+        var vm = control.DataContext;
+        if (vm == null) return;
+        
+        // Пробуем LightCameraItemViewModel
+        if (vm is LightCameraItemViewModel lightVm)
+        {
+            // Зум работает только если IsZoomEnabled = true (только в группах)
+            if (!lightVm.IsZoomEnabled) return;
+            
+            var pos = e.GetPosition(control);
+            var w = control.Bounds.Width;
+            var h = control.Bounds.Height;
+            if (w <= 0 || h <= 0) return;
+            
+            lightVm.ZoomAt(pos.X, pos.Y, w, h, e.Delta.Y);
+            e.Handled = true;
+        }
+        // Или CameraItemViewModel
+        else if (vm is CameraItemViewModel camVm)
+        {
+            // Зум работает только если IsZoomEnabled = true (только в группах)
+            if (!camVm.IsZoomEnabled) return;
+            
+            var pos = e.GetPosition(control);
+            var w = control.Bounds.Width;
+            var h = control.Bounds.Height;
+            if (w <= 0 || h <= 0) return;
+            
+            camVm.ZoomAt(pos.X, pos.Y, w, h, e.Delta.Y);
+            e.Handled = true;
+        }
     }
 
     private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)

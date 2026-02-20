@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using FrigateApp.ViewModels;
+using FrigateApp.Views;
 
 namespace FrigateApp
 {
@@ -18,6 +19,24 @@ namespace FrigateApp
         {
             if (param is null)
                 return null;
+
+            // Специальная обработка для OptimizedCamerasViewModel
+            if (param is OptimizedCamerasViewModel)
+            {
+                return new OptimizedCamerasView();
+            }
+            
+            // Специальная обработка для ProfessionalCameraPlayerViewModel
+            if (param is ProfessionalCameraPlayerViewModel)
+            {
+                return new ProfessionalCameraPlayerView();
+            }
+            
+            // Специальная обработка для LowLatencyCameraPlayerViewModel
+            if (param is LowLatencyCameraPlayerViewModel)
+            {
+                return new LowLatencyCameraPlayerView();
+            }
 
             var name = param.GetType().FullName!.Replace("ViewModel", "View", StringComparison.Ordinal);
             var type = Type.GetType(name);
