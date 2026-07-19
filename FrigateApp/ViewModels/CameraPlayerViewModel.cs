@@ -215,7 +215,7 @@ public partial class CameraPlayerViewModel : ViewModelBase, IDisposable
     {
         if (_disposed || _snapshotCts == null || _snapshotCts.IsCancellationRequested) return;
 
-        Bitmap? newBitmap = null;
+        Bitmap? newBitmap = default;
         try
         {
             using var ms = new System.IO.MemoryStream(bytes);

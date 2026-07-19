@@ -205,7 +205,7 @@ public partial class LightCameraItemViewModel : ViewModelBase, IDisposable
     {
         if (_disposed) return;
 
-        Bitmap? newBitmap = null;
+        Bitmap? newBitmap = default;
         try
         {
             using var ms = new System.IO.MemoryStream(bytes);

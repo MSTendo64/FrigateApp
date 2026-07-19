@@ -140,7 +140,15 @@ public partial class CamerasViewModel : ViewModelBase
     [RelayCommand]
     private void OpenRecordings()
     {
-        _onOpenRecordings?.Invoke();
+        try
+        {
+            _onOpenRecordings?.Invoke();
+        }
+        catch
+        {
+
+        }
+        
     }
 
     private void SaveCameraZoom(CameraItemViewModel vm)
@@ -181,11 +189,19 @@ public partial class CamerasViewModel : ViewModelBase
 
     public void Cleanup()
     {
-        _systemMonitor?.Dispose();
-        _wssPool.Dispose();
-        foreach (var c in Cameras)
-            c.Dispose();
-        Cameras.Clear();
+        try
+        {
+            _systemMonitor?.Dispose();
+            _wssPool.Dispose();
+            foreach (var c in Cameras)
+                c.Dispose();
+            Cameras.Clear();
+        }
+        catch (Exception ex) 
+        {
+            Console.WriteLine("Error: "+ ex.Message);
+        }
+        
     }
 
     [RelayCommand]
@@ -229,7 +245,8 @@ public partial class CamerasViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            LoadError = ex.Message;
+            //LoadError = ex.Message;
+            Console.WriteLine("Error: " + ex.Message);
         }
         finally
         {
@@ -247,61 +264,77 @@ public partial class CamerasViewModel : ViewModelBase
 
     private async Task RefreshCameraListAsync(string? groupId)
     {
-        _selectedGroupId = groupId;
-        IsGroupSelected = !string.IsNullOrEmpty(groupId);
-
-        var names = groupId == null || !_cameraGroups.TryGetValue(groupId, out var group)
-            ? _allCameraNames
-            : _allCameraNames.Intersect(group.Cameras ?? new List<string>(), StringComparer.OrdinalIgnoreCase).ToList();
-
-        Title = groupId == null ? "Все камеры" : groupId;
-        if (names.Count > 0)
-            Title += $" ({names.Count})";
-
-        foreach (var c in Cameras)
-            c.Dispose();
-        Cameras.Clear();
-
-        var profileKey = UserPreferencesService.GetProfileKey(_api.BaseUrl, UserName);
-        var zooms = _prefs.GetCameraZooms(profileKey, groupId);
-        var isZoomEnabled = !string.IsNullOrEmpty(groupId);
-
-        foreach (var name in names)
+        try
         {
-            var initialZoom = zooms.TryGetValue(name, out var z) ? z : null;
-            var camConfig = _cameraConfigs.TryGetValue(name, out var c) ? c : null;
-            var rotation = camConfig?.Rotate ?? 0f;
-            var subStreamName = FrigateApiService.GetStreamNameForLive(camConfig, name, useSubStream: true);
-            var item = new CameraItemViewModel(
-                name,
-                _api,
-                () => _onOpenPlayer?.Invoke(name, _api),
-                initialZoom,
-                SaveCameraZoom,
-                isZoomEnabled,
-                _snapshotCache,
-                rotation,
-                TileScale,
-                friendlyName: camConfig?.FriendlyName,
-                subStreamName: subStreamName,
-                wssPool: _wssPool);
-            Cameras.Add(item);
-            item.StartRefresh();
+            _selectedGroupId = groupId;
+            IsGroupSelected = !string.IsNullOrEmpty(groupId);
+
+            var names = groupId == null || !_cameraGroups.TryGetValue(groupId, out var group)
+                ? _allCameraNames
+                : _allCameraNames.Intersect(group.Cameras ?? new List<string>(), StringComparer.OrdinalIgnoreCase).ToList();
+
+            Title = groupId == null ? "Все камеры" : groupId;
+            if (names.Count > 0)
+                Title += $" ({names.Count})";
+
+            foreach (var c in Cameras)
+                c.Dispose();
+            Cameras.Clear();
+
+            var profileKey = UserPreferencesService.GetProfileKey(_api.BaseUrl, UserName);
+            var zooms = _prefs.GetCameraZooms(profileKey, groupId);
+            var isZoomEnabled = !string.IsNullOrEmpty(groupId);
+
+            foreach (var name in names)
+            {
+                var initialZoom = zooms.TryGetValue(name, out var z) ? z : null;
+                var camConfig = _cameraConfigs.TryGetValue(name, out var c) ? c : null;
+                var rotation = camConfig?.Rotate ?? 0f;
+                var subStreamName = FrigateApiService.GetStreamNameForLive(camConfig, name, useSubStream: true);
+                var item = new CameraItemViewModel(
+                    name,
+                    _api,
+                    () => _onOpenPlayer?.Invoke(name, _api),
+                    initialZoom,
+                    SaveCameraZoom,
+                    isZoomEnabled,
+                    _snapshotCache,
+                    rotation,
+                    TileScale,
+                    friendlyName: camConfig?.FriendlyName,
+                    subStreamName: subStreamName,
+                    wssPool: _wssPool);
+                Cameras.Add(item);
+                item.StartRefresh();
+            }
         }
+        catch(Exception ex)
+        {
+            Console.WriteLine("Error: " + ex.Message);
+        }
+       
 
         await Task.CompletedTask.ConfigureAwait(false);
     }
 
     partial void OnTileScaleChanged(double value)
     {
-        // Сохранить новый масштаб
-        var profileKey = UserPreferencesService.GetProfileKey(_api.BaseUrl, UserName);
-        _prefs.SaveTileScale(profileKey, value);
-
-        // Обновить все существующие камеры
-        foreach (var camera in Cameras)
+        try
         {
-            camera.UpdateTileScale(value);
+            // Сохранить новый масштаб
+            var profileKey = UserPreferencesService.GetProfileKey(_api.BaseUrl, UserName);
+            _prefs.SaveTileScale(profileKey, value);
+
+            // Обновить все существующие камеры
+            foreach (var camera in Cameras)
+            {
+                camera.UpdateTileScale(value);
+            }
         }
+        catch(Exception ex)
+        {
+            Console.WriteLine("Error: " + ex.Message);
+        }
+        
     }
 }

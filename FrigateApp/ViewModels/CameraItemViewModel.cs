@@ -310,17 +310,25 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
     /// <summary>Поворачивает Bitmap на заданный угол.</summary>
     private static Bitmap RotateBitmap(Bitmap source, float angle)
     {
+        try
+        {
+            var normalizedAngle = angle % 360;
+            if (normalizedAngle < 0) normalizedAngle += 360;
+
+            // Для точных углов 90, 180, 270 используем быстрый метод
+            if (Math.Abs(normalizedAngle - 90) < 1)
+                return RotateBitmap90(source);
+            if (Math.Abs(normalizedAngle - 180) < 1)
+                return RotateBitmap180(source);
+            if (Math.Abs(normalizedAngle - 270) < 1)
+                return RotateBitmap270(source);
+        }
+        catch
+        {
+
+        }
         // Нормализуем угол
-        var normalizedAngle = angle % 360;
-        if (normalizedAngle < 0) normalizedAngle += 360;
         
-        // Для точных углов 90, 180, 270 используем быстрый метод
-        if (Math.Abs(normalizedAngle - 90) < 1)
-            return RotateBitmap90(source);
-        if (Math.Abs(normalizedAngle - 180) < 1)
-            return RotateBitmap180(source);
-        if (Math.Abs(normalizedAngle - 270) < 1)
-            return RotateBitmap270(source);
         
         // Для других углов возвращаем оригинал (сложный поворот требует SkiaSharp)
         return source;
@@ -328,44 +336,52 @@ public partial class CameraItemViewModel : ViewModelBase, IDisposable
 
     private static Bitmap RotateBitmap90(Bitmap source)
     {
-        var width = source.PixelSize.Width;
-        var height = source.PixelSize.Height;
-        
-        // Читаем исходные пиксели
-        var srcPixels = new byte[width * height * 4];
-        unsafe
+        WriteableBitmap newBitmap = default;
+        try
         {
-            fixed (byte* ptr = srcPixels)
+            var width = source.PixelSize.Width;
+            var height = source.PixelSize.Height;
+
+            // Читаем исходные пиксели
+            var srcPixels = new byte[width * height * 4];
+            unsafe
             {
-                source.CopyPixels(new Avalonia.PixelRect(0, 0, width, height), (nint)ptr, srcPixels.Length, width * 4);
-            }
-        }
-        
-        var newBitmap = new Avalonia.Media.Imaging.WriteableBitmap(
-            new Avalonia.PixelSize(height, width),
-            new Avalonia.Vector(96, 96),
-            Avalonia.Platform.PixelFormat.Bgra8888,
-            Avalonia.Platform.AlphaFormat.Premul);
-        
-        using var dstBuffer = newBitmap.Lock();
-        
-        unsafe
-        {
-            fixed (byte* srcPtr = srcPixels)
-            {
-                var src = (uint*)srcPtr;
-                var dst = (uint*)dstBuffer.Address;
-                
-                for (var y = 0; y < height; y++)
+                fixed (byte* ptr = srcPixels)
                 {
-                    for (var x = 0; x < width; x++)
+                    source.CopyPixels(new Avalonia.PixelRect(0, 0, width, height), (nint)ptr, srcPixels.Length, width * 4);
+                }
+            }
+
+            newBitmap = new Avalonia.Media.Imaging.WriteableBitmap(
+                new Avalonia.PixelSize(height, width),
+                new Avalonia.Vector(96, 96),
+                Avalonia.Platform.PixelFormat.Bgra8888,
+                Avalonia.Platform.AlphaFormat.Premul);
+
+            using var dstBuffer = newBitmap.Lock();
+
+            unsafe
+            {
+                fixed (byte* srcPtr = srcPixels)
+                {
+                    var src = (uint*)srcPtr;
+                    var dst = (uint*)dstBuffer.Address;
+
+                    for (var y = 0; y < height; y++)
                     {
-                        var srcIdx = y * width + x;
-                        var dstIdx = x * height + (height - 1 - y);
-                        dst[dstIdx] = src[srcIdx];
+                        for (var x = 0; x < width; x++)
+                        {
+                            var srcIdx = y * width + x;
+                            var dstIdx = x * height + (height - 1 - y);
+                            dst[dstIdx] = src[srcIdx];
+                        }
                     }
                 }
             }
+        }
+        catch
+        {
+
         }
         
         return newBitmap;
